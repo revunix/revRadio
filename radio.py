@@ -169,7 +169,10 @@ async def play(ctx, url: str):
                 player = discord.FFmpegPCMAudio(url, **ffmpeg_options)
                 ctx.voice_client.play(player, after=lambda e: print(f'Player error: {e}') if e else None)
                 await update_discord_activity(title)
-                update_presence.start()  # Start the task to update presence every 2 minutes
+                
+                # Ensure the presence update task is running and not restarted
+                if not update_presence.is_running():
+                    update_presence.start()  # Start the task to update presence every 2 minutes
     else:
         await ctx.send("Error connecting the voice client.")
 
