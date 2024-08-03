@@ -1,3 +1,5 @@
+import os
+import sys
 import discord
 from discord.ext import commands, tasks
 import asyncio
@@ -101,6 +103,50 @@ async def leave(ctx):
     else:
         await ctx.send("I am not in a voice channel!")
 
+@bot.command(name='setdefault', help='Updates the default stream URL in the configuration file')
+@commands.check(lambda ctx: ctx.channel.id == channel_id and any(role.id in allowed_role_ids for role in ctx.author.roles))
+async def setdefault(ctx, url: str):
+    try:
+        # Read the configuration file
+        config.read('config.ini')
+
+        # Update the default stream URL
+        config.set('settings', 'default_stream_url', url)
+        
+        # Write the updated configuration to the file
+        with open('config.ini', 'w') as configfile:
+            config.write(configfile)
+
+        # Update the default_stream_url variable
+        global default_stream_url
+        default_stream_url = url
+
+        await ctx.send(f"Default stream URL updated to: {url}")
+
+    except Exception as e:
+        await ctx.send(f"Error updating the default stream URL: {e}")
+
+@bot.command(name='restart', help='Restarts the bot')
+@commands.check(lambda ctx: ctx.channel.id == channel_id and any(role.id in allowed_role_ids for role in ctx.author.roles))
+async def restart(ctx):
+    try:
+        await ctx.send("Restarting the bot...")
+        
+        # Stop all currently playing audio
+        for vc in bot.voice_clients:
+            if vc.is_playing():
+                vc.stop()
+            await vc.disconnect()
+        
+        # Wait a moment to ensure that everything has stopped and disconnected
+        await asyncio.sleep(1)
+        
+        # Restart the bot
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+        
+    except Exception as e:
+        await ctx.send(f"Error restarting the bot: {e}")
+
 @bot.command(name='play', help='Plays a radio stream')
 @commands.check(lambda ctx: ctx.channel.id == channel_id and any(role.id in allowed_role_ids for role in ctx.author.roles))
 async def play(ctx, url: str):
@@ -113,6 +159,10 @@ async def play(ctx, url: str):
             return
 
     if ctx.voice_client:
+        if ctx.voice_client.is_playing():
+            ctx.voice_client.stop()  # Stop the currently playing audio
+            await update_discord_activity('Stopped')
+        
         async with ctx.typing():
             title = await get_stream_title(url)
             if title:
@@ -198,5 +248,6 @@ async def on_command_error(ctx, error):
         await ctx.send("You cannot use this command in this channel or you don't have permission to use this command.")
     else:
         await ctx.send(f"An error occurred: {str(error)}")
+
 
 bot.run(token)
