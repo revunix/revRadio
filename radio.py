@@ -1,5 +1,6 @@
 import discord
 from discord.ext import commands, tasks
+from discord.ui import Button, View
 import asyncio
 import configparser
 import subprocess
@@ -10,6 +11,22 @@ import sys
 # Read configuration file
 config = configparser.ConfigParser()
 config.read('config.ini')
+
+def print_config_keys():
+    # Initialize configparser and read the config file
+    config = configparser.ConfigParser()
+    config.read('config.ini')
+
+    # Print all keys in 'radio_stations' section
+    if config.has_section('radio_stations'):
+        print("Available options in 'radio_stations':", config.options('radio_stations'))
+        for key in config['radio_stations']:
+            print(f"{key}: {config['radio_stations'][key]}")
+    else:
+        print("No 'radio_stations' section found.")
+
+# Call the function to print keys
+print_config_keys()
 
 # Load configuration values
 token = config['settings']['token']
@@ -24,6 +41,7 @@ client_id = config['settings']['client_id']  # Discord application client ID
 def load_radio_stations():
     stations = {}
     for key in config['radio_stations']:
+        print(f"Loaded key: {key}")  # Debugging: Print loaded key
         if key.endswith('_name'):
             index = key.split('_')[0]
             name = config['radio_stations'][key]
@@ -95,7 +113,7 @@ async def on_ready():
                 if not update_presence.is_running():
                     update_presence.start()  # Start the task to update presence every 2 minutes
 
-@bot.command(name='addstation', help='Adds a new radio station to the configuration file')
+@bot.command(name='add', help='Adds a new radio station to the configuration file')
 @commands.check(lambda ctx: ctx.channel.id == channel_id and any(role.id in allowed_role_ids for role in ctx.author.roles))
 async def addstation(ctx, name: str, url: str):
     global radio_stations  # Declare global to modify the global variable
@@ -114,17 +132,115 @@ async def addstation(ctx, name: str, url: str):
     
     await ctx.send(f"Added new station: {name}")
 
-@bot.command(name='stations', help='Displays a list of available radio stations')
+@bot.command(name='remove', help='Displays a menu to remove a radio station')
+@commands.check(lambda ctx: ctx.channel.id == channel_id and any(role.id in allowed_role_ids for role in ctx.author.roles))
+async def remove_station(ctx):
+    # Create a view with buttons for each radio station
+    view = View()
+    for index, station_name in enumerate(radio_stations.keys(), start=1):
+        button = Button(label=station_name, style=discord.ButtonStyle.red, custom_id=f'remove_{index}')
+        button.callback = lambda interaction, idx=index: remove_station_callback(interaction, idx)
+        view.add_item(button)
+
+    await ctx.send("Select a station to remove:", view=view)
+
+async def remove_station_callback(interaction, index):
+    global radio_stations  # Declare global before accessing the variable
+
+    # Ensure the index is valid
+    station_names = list(radio_stations.keys())
+    if 1 <= index <= len(station_names):
+        station_name = station_names[index - 1]
+        removed = False
+
+        # Debugging: Print all keys and the index being used
+        print(f"Index received: {index}")
+        print(f"Station names: {station_names}")
+
+        # Define keys to remove based on index
+        name_key = f'station{index}_name'
+        url_key = f'station{index}_url'
+        print(f"Attempting to remove keys: {name_key}, {url_key}")
+
+        # Check and remove keys
+        if config.has_section('radio_stations'):
+            if config.has_option('radio_stations', name_key):
+                print(f"Removing key: {name_key}")
+                config.remove_option('radio_stations', name_key)
+                removed = True
+            else:
+                print(f"Key not found: {name_key}")
+
+            if config.has_option('radio_stations', url_key):
+                print(f"Removing key: {url_key}")
+                config.remove_option('radio_stations', url_key)
+                removed = True
+            else:
+                print(f"Key not found: {url_key}")
+
+        # Write changes to the configuration file
+        if removed:
+            with open('config.ini', 'w') as configfile:
+                config.write(configfile)
+
+            # Update the global radio_stations variable
+            radio_stations = load_radio_stations()  # Reload stations
+
+            await interaction.response.send_message(f"Removed station: {station_name}")
+        else:
+            await interaction.response.send_message("No keys found to remove.")
+    else:
+        await interaction.response.send_message("Invalid station number.")
+
+@bot.command(name='stations', help='Displays a list of available radio stations with buttons to play them')
 @commands.check(lambda ctx: ctx.channel.id == channel_id and any(role.id in allowed_role_ids for role in ctx.author.roles))
 async def stations(ctx):
     if not radio_stations:
         await ctx.send("No radio stations available.")
         return
-    
-    # Create a list of radio stations with index
-    radio_list = "\n".join([f"{index + 1}. {name}" for index, name in enumerate(radio_stations.keys())])
-    await ctx.send(f"Available radio stations:\n{radio_list}\n\nUse `!play <number>` to play a station.")
 
+    # Create a list of radio stations with index
+    radio_list = list(radio_stations.keys())
+    view = View()  # Create a view to hold buttons
+
+    for index, station_name in enumerate(radio_list):
+        # Create a button for each station
+        button = Button(label=station_name, style=discord.ButtonStyle.primary, custom_id=str(index))
+        button.callback = lambda interaction, index=index: play_station_callback(interaction, index + 1)  # Add callback
+        view.add_item(button)
+
+    await ctx.send("Available radio stations:", view=view)
+async def play_station_callback(interaction, index):
+    if interaction.user.guild.voice_client is None:
+        if interaction.user.voice:
+            channel = interaction.user.voice.channel
+            await channel.connect()
+        else:
+            await interaction.response.send_message("You are not connected to a voice channel.")
+            return
+
+    if interaction.guild.voice_client:
+        if interaction.guild.voice_client.is_playing():
+            interaction.guild.voice_client.stop()
+
+        station_names = list(radio_stations.keys())
+        if 1 <= index <= len(station_names):
+            station_name = station_names[index - 1]
+            url = radio_stations[station_name]
+            async with interaction.channel.typing():
+                title = await get_stream_title(url)
+                if title:
+                    player = discord.FFmpegPCMAudio(url, **ffmpeg_options)
+                    interaction.guild.voice_client.play(player, after=lambda e: print(f'Player error: {e}') if e else None)
+                    await update_discord_activity(title)
+                    await interaction.response.send_message(f"Now playing: {station_name}")
+                else:
+                    await interaction.response.send_message("Error fetching stream title.")
+        else:
+            await interaction.response.send_message("Invalid station number.")
+    else:
+        await interaction.response.send_message("Error connecting the voice client.")
+        
 @bot.command(name='play', help='Plays a selected radio station by index')
 @commands.check(lambda ctx: ctx.channel.id == channel_id and any(role.id in allowed_role_ids for role in ctx.author.roles))
 async def play_station(ctx, index: int):
@@ -191,52 +307,57 @@ async def commands_list(ctx):
     embed = discord.Embed(title="Available Commands", description="Here are the available commands you can use:", color=discord.Color.blue())
 
     commands_list = [
-        {
-            "name": "join",
-            "description": "Joins a voice channel",
-            "usage": ""
-        },
-        {
-            "name": "leave",
-            "description": "Leaves the voice channel",
-            "usage": ""
-        },
-        {
-            "name": "play",
-            "description": "Plays a selected radio station by index",
-            "usage": "<index>"
-        },
-        {
-            "name": "stop",
-            "description": "Stops the playback",
-            "usage": ""
-        },
-        {
-            "name": "vol",
-            "description": "Adjusts the playback volume",
-            "usage": "<volume (0-100)>"
-        },
-        {
-            "name": "setdefault",
-            "description": "Updates the default stream URL in the configuration file",
-            "usage": "<url>"
-        },
-        {
-            "name": "restart",
-            "description": "Restarts the bot",
-            "usage": ""
-        },
-        {
-            "name": "stations",
-            "description": "Displays a list of available radio stations",
-            "usage": ""
-        },
-        {
-            "name": "addstation",
-            "description": "Adds a new radio station to the configuration file",
-            "usage": "<name> <url>"
-        }
-    ]
+    {
+        "name": "join",
+        "description": "Joins a voice channel",
+        "usage": ""
+    },
+    {
+        "name": "leave",
+        "description": "Leaves the voice channel",
+        "usage": ""
+    },
+    {
+        "name": "play",
+        "description": "Plays a selected radio station by index",
+        "usage": "<index>"
+    },
+    {
+        "name": "stop",
+        "description": "Stops the playback",
+        "usage": ""
+    },
+    {
+        "name": "vol",
+        "description": "Adjusts the playback volume",
+        "usage": "<volume (0-100)>"
+    },
+    {
+        "name": "setdefault",
+        "description": "Updates the default stream URL in the configuration file",
+        "usage": "<url>"
+    },
+    {
+        "name": "stations",
+        "description": "Displays a list of available radio stations",
+        "usage": ""
+    },
+    {
+        "name": "add",
+        "description": "Adds a new radio station to the configuration file",
+        "usage": "<name> <url>"
+    },
+    {
+        "name": "remove",
+        "description": "Removes a radio station from the configuration file",
+        "usage": "<index>"
+    },
+    {
+        "name": "restart",
+        "description": "Restarts the bot",
+        "usage": ""
+    }
+]
 
     for cmd in commands_list:
         usage = f"Usage: `!{cmd['name']} {cmd['usage']}`" if cmd['usage'] else ""
