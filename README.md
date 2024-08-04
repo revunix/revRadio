@@ -6,19 +6,28 @@ A simple Discord bot that streams radio stations in voice channels and updates i
 
 - **Stream Radio**: Plays a specified radio stream in a voice channel.
 - **Volume Control**: Adjusts playback volume with a simple command.
-- **Custom Help Command**: Provides a list of available commands.
+- **Custom Help Command**: Provides a list of available commands with a user-friendly interface.
 - **Discord Rich Presence**: Displays the current song title in Discord Rich Presence.
 - **Automatic Presence Update**: Updates Rich Presence every 2 minutes with the current song title.
 - **Role-based Permissions**: Commands are restricted to users with specific roles.
 - **Channel Restriction**: Commands can only be used in a designated control channel.
+- **Join and Leave Voice Channels**: Commands to join or leave voice channels.
+- **Play and Stop Radio Streams**: Commands to start or stop playback of radio streams.
+- **Adjust Playback Volume**: Adjust the volume of the bot's audio playback.
+- **Update Default Stream URL**: Change the default stream URL used by the bot.
+- **Add and List Radio Stations**: Add new radio stations to the configuration and list available stations.
 
 ### Commands
 
 - `!join`: Joins a voice channel.
 - `!leave`: Leaves the voice channel.
-- `!play <url>`: Plays a radio stream.
+- `!play <url|number>`: Plays a radio stream from a URL or by selecting a station from the list.
 - `!stop`: Stops the playback.
 - `!vol <volume>`: Adjusts the playback volume (0-100).
+- `!setdefault <url>`: Updates the default stream URL in the configuration.
+- `!stations`: Displays a list of available radio stations with indices.
+- `!addstation <name> <url>`: Adds a new radio station to the configuration.
+- `!restart`: Restarts the bot.
 - `!commands`: Displays the list of available commands.
 
 ## Setup
@@ -53,6 +62,12 @@ A simple Discord bot that streams radio stations in voice channels and updates i
     default_volume = YOUR_DEFAULT_VOLUME (0-100)
     allowed_role_ids = ROLE_ID1,ROLE_ID2
     client_id = YOUR_DISCORD_APPLICATION_CLIENT_ID
+
+    [radio_stations]
+    station1_name = Cool Radio
+    station1_url = http://coolradio.example.com/stream
+    station2_name = Jazz Station
+    station2_url = http://jazzstation.example.com/stream
     ```
 
 4. **Run the Bot**
