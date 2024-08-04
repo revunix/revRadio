@@ -145,52 +145,30 @@ async def remove_station(ctx):
     await ctx.send("Select a station to remove:", view=view)
 
 async def remove_station_callback(interaction, index):
-    global radio_stations  # Declare global before accessing the variable
+    try:
+        global radio_stations
 
-    # Ensure the index is valid
-    station_names = list(radio_stations.keys())
-    if 1 <= index <= len(station_names):
-        station_name = station_names[index - 1]
-        removed = False
+        station_names = list(radio_stations.keys())
+        if 1 <= index <= len(station_names):
+            station_name = station_names[index - 1]
+            name_key = f'station{index}_name'
+            url_key = f'station{index}_url'
 
-        # Debugging: Print all keys and the index being used
-        print(f"Index received: {index}")
-        print(f"Station names: {station_names}")
+            if config.has_section('radio_stations'):
+                if config.has_option('radio_stations', name_key):
+                    config.remove_option('radio_stations', name_key)
+                if config.has_option('radio_stations', url_key):
+                    config.remove_option('radio_stations', url_key)
 
-        # Define keys to remove based on index
-        name_key = f'station{index}_name'
-        url_key = f'station{index}_url'
-        print(f"Attempting to remove keys: {name_key}, {url_key}")
-
-        # Check and remove keys
-        if config.has_section('radio_stations'):
-            if config.has_option('radio_stations', name_key):
-                print(f"Removing key: {name_key}")
-                config.remove_option('radio_stations', name_key)
-                removed = True
-            else:
-                print(f"Key not found: {name_key}")
-
-            if config.has_option('radio_stations', url_key):
-                print(f"Removing key: {url_key}")
-                config.remove_option('radio_stations', url_key)
-                removed = True
-            else:
-                print(f"Key not found: {url_key}")
-
-        # Write changes to the configuration file
-        if removed:
             with open('config.ini', 'w') as configfile:
                 config.write(configfile)
 
-            # Update the global radio_stations variable
-            radio_stations = load_radio_stations()  # Reload stations
-
+            radio_stations = load_radio_stations()
             await interaction.response.send_message(f"Removed station: {station_name}")
         else:
-            await interaction.response.send_message("No keys found to remove.")
-    else:
-        await interaction.response.send_message("Invalid station number.")
+            await interaction.response.send_message("Invalid station number.")
+    except Exception as e:
+        await interaction.response.send_message(f"An error occurred: {str(e)}")
 
 @bot.command(name='stations', help='Displays a list of available radio stations with buttons to play them')
 @commands.check(lambda ctx: ctx.channel.id == channel_id and any(role.id in allowed_role_ids for role in ctx.author.roles))
@@ -241,41 +219,84 @@ async def play_station_callback(interaction, index):
     else:
         await interaction.response.send_message("Error connecting the voice client.")
         
-@bot.command(name='play', help='Plays a selected radio station by index')
+@bot.command(name='play', help='Plays a selected radio station by index or a radio stream URL')
 @commands.check(lambda ctx: ctx.channel.id == channel_id and any(role.id in allowed_role_ids for role in ctx.author.roles))
-async def play_station(ctx, index: int):
-    if ctx.voice_client is None:
-        if ctx.message.author.voice:
-            channel = ctx.message.author.voice.channel
-            await channel.connect()
-        else:
-            await ctx.send("The bot is not in a voice channel and you are not in one either.")
-            return
-
-    if ctx.voice_client:
-        if ctx.voice_client.is_playing():
-            ctx.voice_client.stop()  # Stop the currently playing audio
-            await update_discord_activity('Stopped')
+async def play(ctx, *args):
+    # Check if args contains an integer (index) or a URL
+    if len(args) == 1:
+        arg = args[0]
         
-        station_names = list(radio_stations.keys())
-        if 1 <= index <= len(station_names):
-            station_name = station_names[index - 1]
-            url = radio_stations[station_name]
-            async with ctx.typing():
-                title = await get_stream_title(url)
-                if title:
-                    player = discord.FFmpegPCMAudio(url, **ffmpeg_options)
-                    ctx.voice_client.play(player, after=lambda e: print(f'Player error: {e}') if e else None)
-                    await update_discord_activity(title)
-                    await ctx.send(f"Now playing: {station_name}")
-                    
-                    # Ensure the presence update task is running and not restarted
-                    if not update_presence.is_running():
-                        update_presence.start()  # Start the task to update presence every 2 minutes
+        # Determine if the argument is an index or a URL
+        if arg.isdigit():
+            # Handle the case where arg is an integer index
+            index = int(arg)
+            if ctx.voice_client is None:
+                if ctx.message.author.voice:
+                    channel = ctx.message.author.voice.channel
+                    await channel.connect()
+                else:
+                    await ctx.send("The bot is not in a voice channel and you are not in one either.")
+                    return
+
+            if ctx.voice_client:
+                # Stop currently playing audio if any
+                if ctx.voice_client.is_playing():
+                    ctx.voice_client.stop()
+                
+                station_names = list(radio_stations.keys())
+                if 1 <= index <= len(station_names):
+                    station_name = station_names[index - 1]
+                    url = radio_stations[station_name]
+                    async with ctx.typing():
+                        title = await get_stream_title(url)
+                        if title:
+                            player = discord.FFmpegPCMAudio(url, **ffmpeg_options)
+                            ctx.voice_client.play(player, after=lambda e: print(f'Player error: {e}') if e else None)
+                            await update_discord_activity(title)
+                            await ctx.send(f"Now playing: {station_name}")
+
+                            # Ensure the presence update task is running and not restarted
+                            if not update_presence.is_running():
+                                update_presence.start()  # Start the task to update presence every 2 minutes
+                        else:
+                            await ctx.send("Error fetching stream title.")
+                else:
+                    await ctx.send("Invalid station number.")
+            else:
+                await ctx.send("Error connecting the voice client.")
         else:
-            await ctx.send("Invalid station number.")
+            # Handle the case where arg is a URL
+            url = arg
+            if ctx.voice_client is None:
+                if ctx.message.author.voice:
+                    channel = ctx.message.author.voice.channel
+                    await channel.connect()
+                else:
+                    await ctx.send("The bot is not in a voice channel and you are not in one either.")
+                    return
+
+            if ctx.voice_client:
+                # Stop currently playing audio if any
+                if ctx.voice_client.is_playing():
+                    ctx.voice_client.stop()
+
+                async with ctx.typing():
+                    title = await get_stream_title(url)
+                    if title:
+                        player = discord.FFmpegPCMAudio(url, **ffmpeg_options)
+                        ctx.voice_client.play(player, after=lambda e: print(f'Player error: {e}') if e else None)
+                        await update_discord_activity(title)
+                        await ctx.send(f"Now playing stream: {title}")
+
+                        # Ensure the presence update task is running and not restarted
+                        if not update_presence.is_running():
+                            update_presence.start()  # Start the task to update presence every 2 minutes
+                    else:
+                        await ctx.send("Error fetching stream title.")
+            else:
+                await ctx.send("Error connecting the voice client.")
     else:
-        await ctx.send("Error connecting the voice client.")
+        await ctx.send("Please provide either a station index or a stream URL.")
 
 @bot.command(name='setdefault', help='Updates the default stream URL in the configuration file')
 @commands.check(lambda ctx: ctx.channel.id == channel_id and any(role.id in allowed_role_ids for role in ctx.author.roles))
@@ -293,9 +314,6 @@ async def restart(ctx):
     await ctx.send("Restarting the bot...")
     await bot.close()
     os.execl(sys.executable, sys.executable, *sys.argv)
-
-import discord
-from discord.ext import commands
 
 @bot.command(name='commands', help='Displays this help message')
 async def commands_list(ctx):
