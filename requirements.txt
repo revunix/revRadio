@@ -1,5 +1,6 @@
 discord.py
-youtube-dl
+discord-py-interactions
+yt-dlp
 pynacl
 pypresence
 requests
