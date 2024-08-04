@@ -26,7 +26,8 @@ A simple Discord bot that streams radio stations in voice channels and updates i
 - `!vol <volume>`: Adjusts the playback volume (0-100).
 - `!setdefault <url>`: Updates the default stream URL in the configuration.
 - `!stations`: Displays a list of available radio stations with indices.
-- `!addstation <name> <url>`: Adds a new radio station to the configuration.
+- `!add <name> <url>`: Adds a new radio station to the configuration.
+- `!remove <index>` Removes a radio station from the configuration file.
 - `!restart`: Restarts the bot.
 - `!commands`: Displays the list of available commands.
 
