@@ -27,7 +27,7 @@ A simple Discord bot that streams radio stations in voice channels and updates i
 - `!setdefault <url>`: Updates the default stream URL in the configuration.
 - `!stations`: Displays a list of available radio stations with indices.
 - `!add <name> <url>`: Adds a new radio station to the configuration.
-- `!remove <index>` Removes a radio station from the configuration file.
+- `!remove <index>`: Removes a radio station from the configuration file.
 - `!restart`: Restarts the bot.
 - `!commands`: Displays the list of available commands.
 
@@ -78,6 +78,28 @@ A simple Discord bot that streams radio stations in voice channels and updates i
     ```bash
     python radio.py
     ```
+
+## Docker Setup
+
+To run the bot using Docker, follow these steps:
+
+1. **Build the Docker Image**
+
+    In the root directory of your project, build the Docker image:
+
+    ```bash
+    docker build -t radiobot .
+    ```
+
+2. **Run the Docker Container**
+
+    Start the container in detached mode:
+
+    ```bash
+    docker run -d --name radiobot radiobot:latest
+    ```
+
+This will create and run a Docker container with your bot, including FFmpeg for streaming.
 
 ## Rich Presence
 
