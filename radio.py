@@ -37,6 +37,15 @@ default_stream_url = config['settings']['default_stream_url']
 default_volume_percentage = int(config['settings']['default_volume'])
 allowed_role_ids = list(map(int, config['settings']['allowed_role_ids'].split(',')))
 client_id = config['settings']['client_id']  # Discord application client ID
+allowed_channel_ids = list(map(int, config['settings']['allowed_channel_ids'].split(',')))
+allowed_role_ids = list(map(int, config['settings']['allowed_role_ids'].split(',')))
+
+# Definieren wir eine Hilfsfunktion für die Berechtigungsprüfung:
+def is_allowed_channel_and_role():
+    def predicate(ctx):
+        return (ctx.channel.id in allowed_channel_ids and 
+                any(role.id in allowed_role_ids for role in ctx.author.roles))
+    return commands.check(predicate)
 
 # Function to initialize radio stations
 def load_radio_stations():
@@ -172,7 +181,7 @@ async def remove_station_callback(interaction, index):
         await interaction.response.send_message(f"An error occurred: {str(e)}")
 
 @bot.command(name='stations', help='Displays a list of available radio stations with buttons to play them')
-@commands.check(lambda ctx: ctx.channel.id == channel_id and any(role.id in allowed_role_ids for role in ctx.author.roles))
+@is_allowed_channel_and_role()
 async def stations(ctx):
     if not radio_stations:
         await ctx.send("No radio stations available.")
@@ -189,6 +198,8 @@ async def stations(ctx):
         view.add_item(button)
 
     await ctx.send("Available radio stations:", view=view)
+
+# Der Rest des Codes bleibt unverändert
 
 async def play_station_callback(interaction, index):
     if interaction.user.guild.voice_client is None:
@@ -222,7 +233,7 @@ async def play_station_callback(interaction, index):
         await interaction.response.send_message("Error connecting the voice client.")
         
 @bot.command(name='play', help='Plays a selected radio station by index or a radio stream URL')
-@commands.check(lambda ctx: ctx.channel.id == channel_id and any(role.id in allowed_role_ids for role in ctx.author.roles))
+@is_allowed_channel_and_role()
 async def play(ctx, *args):
     # Check if args contains an integer (index) or a URL
     if len(args) == 1:
@@ -451,7 +462,7 @@ async def status(ctx):
     await ctx.send(embed=embed)
 
 @bot.command(name='vol', help='Adjusts the playback volume')
-@commands.check(lambda ctx: ctx.channel.id == channel_id and any(role.id in allowed_role_ids for role in ctx.author.roles))
+@is_allowed_channel_and_role()
 async def vol(ctx, volume: int):
     if ctx.voice_client and ctx.voice_client.is_playing():
         if 0 <= volume <= 100:
