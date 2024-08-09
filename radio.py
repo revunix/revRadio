@@ -1,6 +1,7 @@
 import discord
 from discord.ext import commands, tasks
 from discord.ui import Button, View
+from discord import PCMVolumeTransformer
 import asyncio
 import configparser
 import subprocess
@@ -188,6 +189,7 @@ async def stations(ctx):
         view.add_item(button)
 
     await ctx.send("Available radio stations:", view=view)
+
 async def play_station_callback(interaction, index):
     if interaction.user.guild.voice_client is None:
         if interaction.user.voice:
@@ -315,6 +317,21 @@ async def restart(ctx):
     await bot.close()
     os.execl(sys.executable, sys.executable, *sys.argv)
 
+@bot.command(name='reload', help='Reloads the configuration file')
+@commands.check(lambda ctx: ctx.channel.id == channel_id and any(role.id in allowed_role_ids for role in ctx.author.roles))
+async def reload(ctx):
+    global config
+    global radio_stations
+    try:
+        # Reload the configuration file
+        config.read('config.ini')
+        # Reload the radio stations
+        radio_stations = load_radio_stations()
+        await ctx.send("Configuration reloaded successfully.")
+    except Exception as e:
+        await ctx.send(f"Error reloading configuration: {str(e)}")
+        print(f"Error reloading configuration: {str(e)}")
+
 @bot.command(name='commands', help='Displays this help message')
 async def commands_list(ctx):
     if ctx.channel.id != channel_id:
@@ -383,14 +400,72 @@ async def commands_list(ctx):
 
     await ctx.send(embed=embed)
 
+# Globale Variable für den aktuellen Sender
+current_station = "None"
+current_title = "Nothing is currently playing"
+
+@tasks.loop(minutes=2)
+async def update_status():
+    global current_title, current_station
+    if bot.voice_clients and bot.voice_clients[0].is_playing():
+        title = await get_stream_title(default_stream_url)
+        if title:
+            current_title = title
+        # Stattdessen den aktuellen Sender aus den vorhandenen Informationen ermitteln
+        current_station = next((name for name, url in radio_stations.items() if url == default_stream_url), "Unknown")
+    else:
+        current_station = "None"
+        current_title = "Nothing is currently playing"
+
+@bot.event
+async def on_ready():
+    print(f'Logged in as {bot.user.name}')
+    
+    default_channel = bot.get_channel(default_voice_channel_id)
+    if default_channel:
+        if not default_channel.guild.voice_client:
+            await default_channel.connect()
+        
+        if bot.voice_clients[0]:
+            title = await get_stream_title(default_stream_url)
+            if title:
+                player = discord.FFmpegPCMAudio(default_stream_url, **ffmpeg_options)
+                bot.voice_clients[0].play(player, after=lambda e: print(f'Player error: {e}') if e else None)
+                await update_discord_activity(title)
+                
+                if not update_presence.is_running():
+                    update_presence.start()
+                
+                # Start the status update task
+                if not update_status.is_running():
+                    update_status.start()
+
+@bot.command(name='status', help='Zeigt den aktuellen Sender und das gerade gespielte Lied an')
+@commands.check(lambda ctx: ctx.channel.id == channel_id and any(role.id in allowed_role_ids for role in ctx.author.roles))
+async def status(ctx):
+    embed = discord.Embed(title="Current Status", color=discord.Color.blue())
+    embed.add_field(name="Station", value=current_station, inline=False)
+    embed.add_field(name="Title", value=current_title, inline=False)
+    embed.set_footer(text="Use !help for more commands")
+    
+    await ctx.send(embed=embed)
+
 @bot.command(name='vol', help='Adjusts the playback volume')
-@commands.check(lambda ctx: ctx.channel.id == channel_id and  any(role.id in allowed_role_ids for role in ctx.author.roles))
+@commands.check(lambda ctx: ctx.channel.id == channel_id and any(role.id in allowed_role_ids for role in ctx.author.roles))
 async def vol(ctx, volume: int):
     if ctx.voice_client and ctx.voice_client.is_playing():
         if 0 <= volume <= 100:
-            ctx.voice_client.source.volume = volume / 100.0
+            # Stoppen Sie die aktuelle Wiedergabe
+            ctx.voice_client.stop()
+            
+            # Erstellen Sie eine neue Audioquelle mit der angepassten Lautstärke
+            source = discord.PCMVolumeTransformer(discord.FFmpegPCMAudio(default_stream_url, **ffmpeg_options))
+            source.volume = volume / 100.0
+            
+            # Starten Sie die Wiedergabe mit der neuen Quelle
+            ctx.voice_client.play(source, after=lambda e: print(f'Player error: {e}') if e else None)
+            
             await ctx.send(f"Volume set to {volume}%")
-            await update_discord_activity(ctx.voice_client.source.title)
         else:
             await ctx.send("Volume must be between 0 and 100")
     else:
