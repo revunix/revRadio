@@ -1,315 +1,303 @@
 import discord
 from discord.ext import commands, tasks
 from discord.ui import Button, View
-from discord import PCMVolumeTransformer
-import asyncio
-import configparser
-import subprocess
-import re
-import os
-import sys
+import asyncio, configparser, subprocess, re, os, sys, psutil, pkg_resources, platform, aiohttp, base64
 
-# Read configuration file
 config = configparser.ConfigParser()
 config.read('config.ini')
-
-def print_config_keys():
-    # Initialize configparser and read the config file
-    config = configparser.ConfigParser()
-    config.read('config.ini')
-
-    # Print all keys in 'radio_stations' section
-    if config.has_section('radio_stations'):
-        print("Available options in 'radio_stations':", config.options('radio_stations'))
-        for key in config['radio_stations']:
-            print(f"{key}: {config['radio_stations'][key]}")
-    else:
-        print("No 'radio_stations' section found.")
-
-# Call the function to print keys
-print_config_keys()
-
-# Load configuration values
-token = config['settings']['token']
-channel_id = int(config['settings']['channel_id'])
-default_voice_channel_id = int(config['settings']['default_voice_channel_id'])
-default_stream_url = config['settings']['default_stream_url']
-default_volume_percentage = int(config['settings']['default_volume'])
-allowed_role_ids = list(map(int, config['settings']['allowed_role_ids'].split(',')))
-client_id = config['settings']['client_id']  # Discord application client ID
-allowed_channel_ids = list(map(int, config['settings']['allowed_channel_ids'].split(',')))
-allowed_role_ids = list(map(int, config['settings']['allowed_role_ids'].split(',')))
-
-# Definieren wir eine Hilfsfunktion für die Berechtigungsprüfung:
-def is_allowed_channel_and_role():
-    def predicate(ctx):
-        return (ctx.channel.id in allowed_channel_ids and 
-                any(role.id in allowed_role_ids for role in ctx.author.roles))
-    return commands.check(predicate)
-
-# Function to initialize radio stations
-def load_radio_stations():
-    stations = {}
-    for key in config['radio_stations']:
-        print(f"Loaded key: {key}")  # Debugging: Print loaded key
-        if key.endswith('_name'):
-            index = key.split('_')[0]
-            name = config['radio_stations'][key]
-            url_key = f"{index}_url"
-            if url_key in config['radio_stations']:
-                url = config['radio_stations'][url_key]
-                stations[name] = url
-    return stations
-
-# Initialize radio_stations
-radio_stations = load_radio_stations()
 
 intents = discord.Intents.default()
 intents.message_content = True
 intents.guilds = True
 intents.members = True
-intents.presences = True  # Ensure this is enabled
+intents.presences = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-ffmpeg_options = {
-    'options': '-vn'
-}
+ffmpeg_options = {'options': '-vn'}
+
+def load_config():
+    global token, channel_id, default_voice_channel_id, default_stream_url, default_volume_percentage, allowed_role_ids, client_id, radio_stations
+    token = config['settings']['token']
+    channel_id = int(config['settings']['channel_id'])
+    default_voice_channel_id = int(config['settings']['default_voice_channel_id'])
+    default_stream_url = config['settings']['default_stream_url']
+    default_volume_percentage = int(config['settings']['default_volume'])
+    allowed_role_ids = list(map(int, config['settings']['allowed_role_ids'].split(',')))
+    client_id = config['settings']['client_id']
+    
+    # Modified radio_stations loading to handle potential KeyErrors
+    radio_stations = {}
+    for s in config.sections():
+        if s.startswith('radio_stations'):
+            for i in range(1, len(config[s]) + 1):
+                name_key = f'station{i}_name'
+                url_key = f'station{i}_url'
+                if name_key in config[s] and url_key in config[s]:
+                    radio_stations[config[s][name_key]] = config[s][url_key]
+
+load_config()
 
 async def get_stream_title(url):
     try:
-        process = await asyncio.create_subprocess_exec(
-            'ffmpeg', '-i', url, '-f', 'ffmetadata', '-',
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE
-        )
-        stdout, stderr = await process.communicate()
-        metadata = stderr.decode()
-
-        match = re.search(r'Title\s*:\s*(.*)', metadata)
-        if match:
-            return match.group(1).strip()
-        return 'Unknown Title'
+        process = await asyncio.create_subprocess_exec('ffmpeg', '-i', url, '-f', 'ffmetadata', '-', stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        _, stderr = await process.communicate()
+        match = re.search(r'Title\s*:\s*(.*)', stderr.decode())
+        return match.group(1).strip() if match else 'Unknown Title'
     except Exception as e:
         print(f"Error fetching stream title: {e}")
         return 'Unknown Title'
 
-async def update_discord_activity(title):
-    activity = discord.Activity(name=f"{title}", type=discord.ActivityType.listening)
-    await bot.change_presence(activity=activity)
-
-@tasks.loop(minutes=2)
-async def update_presence():
-    if bot.voice_clients and bot.voice_clients[0].is_playing():
-        title = await get_stream_title(default_stream_url)
-        if title:
-            await update_discord_activity(title)
+async def nickname_change(guild, station_name, bot_user):
+    try:
+        member = guild.get_member(bot_user.id)
+        if member:
+            await member.edit(nick=station_name)  # 'nick' statt 'nickname'
+            print(f"Bot display name changed to {station_name} in guild {guild.name}")
+        else:
+            print(f"Bot user not found in guild {guild.name}")
+    except discord.HTTPException as e:
+        if e.code == 50035:
+            print("You are changing your nickname too fast. Try again later.")
+        elif e.code == 429:
+            retry_after = e.retry_after
+            print(f"Rate limit hit. Retrying after {retry_after} seconds.")
+            await asyncio.sleep(retry_after)
+            await nickname_change(guild, station_name, bot_user)
+        else:
+            print(f"Failed to change bot display name: {e}")
 
 @bot.event
 async def on_ready():
-    print(f'Logged in as {bot.user.name}')
-    
+    print(f'Logged in as {bot.user}')
+    update_activity.start()
+    station_name = next((name for name, url in radio_stations.items() if url == default_stream_url), "Unknown Station")
+    for guild in bot.guilds:
+        await nickname_change(guild, station_name, bot.user)  # bot.user als drittes Argument übergeben
     default_channel = bot.get_channel(default_voice_channel_id)
     if default_channel:
         if not default_channel.guild.voice_client:
             await default_channel.connect()
-        
         if bot.voice_clients[0]:
             title = await get_stream_title(default_stream_url)
             if title:
                 player = discord.FFmpegPCMAudio(default_stream_url, **ffmpeg_options)
                 bot.voice_clients[0].play(player, after=lambda e: print(f'Player error: {e}') if e else None)
-                await update_discord_activity(title)
-                
-                # Ensure the presence update task is running and not restarted
-                if not update_presence.is_running():
-                    update_presence.start()  # Start the task to update presence every 2 minutes
+
+current_stream_url = default_stream_url  # Add this line to store the current stream URL
+
+@tasks.loop(seconds=30)  # 30 Sekunden
+async def update_activity():
+    try:
+        title = await get_stream_title(current_stream_url)  # Use current_stream_url instead of default_stream_url
+        track_name = f"{title}"
+        
+        # Fetch cover image from Spotify
+        cover_url = await fetch_cover_image_url(title)
+        
+        # Create rich presence without cover image
+        activity = discord.Activity(
+            type=discord.ActivityType.listening,
+            name=track_name
+        )
+        
+        # Check if the title has changed
+        if bot.activity and bot.activity.name == track_name:
+            print("The track is already set, skipping update.")
+            return
+        
+        await bot.change_presence(activity=activity)
+        
+        try:
+            # Load configuration
+            config = configparser.ConfigParser()
+            config.read('config.ini')
+            channel_id = int(config['spotify']['update_channel_id'])
+            channel = bot.get_channel(channel_id)
+
+            # Check if the last message in the channel is the same as the current track
+            last_message = None
+            async for message in channel.history(limit=1):
+                last_message = message
+                break
+
+            if last_message and last_message.embeds:
+                last_embed = last_message.embeds[0]
+                if last_embed.fields[0].value == track_name:
+                    print("The track is already posted, skipping update.")
+                    return
+
+            # Create or update embed message
+            embed = discord.Embed(color=0x1DB954)
+            embed.set_thumbnail(url=cover_url)
+            embed.add_field(name="Now Playing", value=track_name, inline=False)
+            new_station_name = next((name for name, url in radio_stations.items() if url == current_stream_url), "Unknown Station")
+            current_nickname = bot.user.display_name if bot.user else "Unknown"
+            if current_nickname != new_station_name:
+                await bot.user.edit(username=new_station_name)
+                current_nickname = new_station_name
+            await nickname_change(channel.guild, new_station_name, bot.user)
+            embed.set_footer(text=f"{new_station_name}", icon_url="")
+
+            # Poste alle 30 Sekunden eine neue Nachricht
+            await channel.send(embed=embed)
+        except Exception as e:
+            print(f"Error updating activity: {e}")
+    except Exception as e:
+        print(f"Error in update_activity: {e}")
+
+async def fetch_cover_image_url(title):
+    try:
+        # API call to fetch cover image URL from Spotify
+        config = configparser.ConfigParser()
+        config.read('config.ini')
+        client_id = config.get('spotify', 'client_id')
+        client_secret = config.get('spotify', 'client_secret')
+        async with aiohttp.ClientSession() as session:
+            auth_response = await session.post(
+                'https://accounts.spotify.com/api/token',
+                data={'grant_type': 'client_credentials'},
+                headers={'Authorization': f'Basic {base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()}'}
+            )
+            auth_data = await auth_response.json()
+            access_token = auth_data['access_token']
+            
+            async with session.get(
+                f"https://api.spotify.com/v1/search?q={title}&type=track",
+                headers={'Authorization': f'Bearer {access_token}'}
+            ) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    if data['tracks']['items']:
+                        track_info = data['tracks']['items'][0]
+                        album_info = track_info['album']
+                        return album_info['images'][0]['url']
+                    else:
+                        print(f"Track not found: {title}")
+                        return 'default_cover_url'
+                else:
+                    print(f"Failed to fetch cover image, status code: {response.status}")
+                    return 'default_cover_url'
+    except Exception as e:
+        print(f"Error fetching cover image: {e}")
+        return 'default_cover_url'
 
 @bot.command(name='add', help='Adds a new radio station to the configuration file')
 @commands.check(lambda ctx: ctx.channel.id == channel_id and any(role.id in allowed_role_ids for role in ctx.author.roles))
 async def addstation(ctx, name: str, url: str):
-    global radio_stations  # Declare global to modify the global variable
-    # Calculate the next index for the new station
     index = len(radio_stations) + 1
-    # Add the new station to the configuration file
     config.set('radio_stations', f'station{index}_name', name)
     config.set('radio_stations', f'station{index}_url', url)
-    
-    # Write changes to the configuration file
     with open('config.ini', 'w') as configfile:
         config.write(configfile)
-    
-    # Update the global radio_stations variable
-    radio_stations = load_radio_stations()  # Reload stations
-    
+    load_config()
     await ctx.send(f"Added new station: {name}")
 
 @bot.command(name='remove', help='Displays a menu to remove a radio station')
 @commands.check(lambda ctx: ctx.channel.id == channel_id and any(role.id in allowed_role_ids for role in ctx.author.roles))
 async def remove_station(ctx):
-    # Create a view with buttons for each radio station
     view = View()
     for index, station_name in enumerate(radio_stations.keys(), start=1):
         button = Button(label=station_name, style=discord.ButtonStyle.red, custom_id=f'remove_{index}')
         button.callback = lambda interaction, idx=index: remove_station_callback(interaction, idx)
         view.add_item(button)
-
     await ctx.send("Select a station to remove:", view=view)
 
 async def remove_station_callback(interaction, index):
     try:
-        global radio_stations
-
         station_names = list(radio_stations.keys())
         if 1 <= index <= len(station_names):
             station_name = station_names[index - 1]
-            name_key = f'station{index}_name'
-            url_key = f'station{index}_url'
-
+            name_key, url_key = f'station{index}_name', f'station{index}_url'
             if config.has_section('radio_stations'):
                 if config.has_option('radio_stations', name_key):
                     config.remove_option('radio_stations', name_key)
                 if config.has_option('radio_stations', url_key):
                     config.remove_option('radio_stations', url_key)
-
             with open('config.ini', 'w') as configfile:
                 config.write(configfile)
-
-            radio_stations = load_radio_stations()
+            load_config()
             await interaction.response.send_message(f"Removed station: {station_name}")
         else:
             await interaction.response.send_message("Invalid station number.")
     except Exception as e:
         await interaction.response.send_message(f"An error occurred: {str(e)}")
 
-@bot.command(name='stations', help='Displays a list of available radio stations with buttons to play them')
-@is_allowed_channel_and_role()
+@bot.command(name='radio', help='Displays a list of available radio stations with buttons to play them')
+@commands.check(lambda ctx: ctx.channel.id == channel_id and any(role.id in allowed_role_ids for role in ctx.author.roles))
 async def stations(ctx):
     if not radio_stations:
         await ctx.send("No radio stations available.")
         return
-
-    # Create a list of radio stations with index
-    radio_list = list(radio_stations.keys())
-    view = View()  # Create a view to hold buttons
-
-    for index, station_name in enumerate(radio_list):
-        # Create a button for each station
+    view = View()
+    for index, station_name in enumerate(radio_stations.keys()):
         button = Button(label=station_name, style=discord.ButtonStyle.primary, custom_id=str(index))
-        button.callback = lambda interaction, index=index: play_station_callback(interaction, index + 1)  # Add callback
+        button.callback = lambda interaction, index=index: play_station_callback(interaction, index + 1)
         view.add_item(button)
-
     await ctx.send("Available radio stations:", view=view)
 
-# Der Rest des Codes bleibt unverändert
-
 async def play_station_callback(interaction, index):
+    global current_stream_url  # Add this line to modify the global variable
     if interaction.user.guild.voice_client is None:
         if interaction.user.voice:
-            channel = interaction.user.voice.channel
-            await channel.connect()
+            await interaction.user.voice.channel.connect()
         else:
             await interaction.response.send_message("You are not connected to a voice channel.")
             return
-
     if interaction.guild.voice_client:
         if interaction.guild.voice_client.is_playing():
             interaction.guild.voice_client.stop()
-
         station_names = list(radio_stations.keys())
         if 1 <= index <= len(station_names):
             station_name = station_names[index - 1]
             url = radio_stations[station_name]
+            current_stream_url = url  # Update the current stream URL
             async with interaction.channel.typing():
                 title = await get_stream_title(url)
                 if title:
                     player = discord.FFmpegPCMAudio(url, **ffmpeg_options)
                     interaction.guild.voice_client.play(player, after=lambda e: print(f'Player error: {e}') if e else None)
-                    await update_discord_activity(title)
                     await interaction.response.send_message(f"Now playing: {station_name}")
+                    await nickname_change(interaction.guild, station_name, interaction.guild.me)  # Change bot name after switching station
                 else:
                     await interaction.response.send_message("Error fetching stream title.")
         else:
             await interaction.response.send_message("Invalid station number.")
     else:
         await interaction.response.send_message("Error connecting the voice client.")
-        
+
 @bot.command(name='play', help='Plays a selected radio station by index or a radio stream URL')
-@is_allowed_channel_and_role()
-async def play(ctx, *args):
-    # Check if args contains an integer (index) or a URL
-    if len(args) == 1:
-        arg = args[0]
-        
-        # Determine if the argument is an index or a URL
-        if arg.isdigit():
-            # Handle the case where arg is an integer index
-            index = int(arg)
-            if ctx.voice_client is None:
-                if ctx.message.author.voice:
-                    channel = ctx.message.author.voice.channel
-                    await channel.connect()
-                else:
-                    await ctx.send("The bot is not in a voice channel and you are not in one either.")
-                    return
-
-            if ctx.voice_client:
-                # Stop currently playing audio if any
-                if ctx.voice_client.is_playing():
-                    ctx.voice_client.stop()
-                
-                station_names = list(radio_stations.keys())
-                if 1 <= index <= len(station_names):
-                    station_name = station_names[index - 1]
-                    url = radio_stations[station_name]
-                    async with ctx.typing():
-                        title = await get_stream_title(url)
-                        if title:
-                            player = discord.FFmpegPCMAudio(url, **ffmpeg_options)
-                            ctx.voice_client.play(player, after=lambda e: print(f'Player error: {e}') if e else None)
-                            await update_discord_activity(title)
-                            await ctx.send(f"Now playing: {station_name}")
-
-                            # Ensure the presence update task is running and not restarted
-                            if not update_presence.is_running():
-                                update_presence.start()  # Start the task to update presence every 2 minutes
-                        else:
-                            await ctx.send("Error fetching stream title.")
-                else:
-                    await ctx.send("Invalid station number.")
-            else:
-                await ctx.send("Error connecting the voice client.")
+@commands.check(lambda ctx: ctx.channel.id == channel_id and any(role.id in allowed_role_ids for role in ctx.author.roles))
+async def play(ctx, arg):
+    if ctx.voice_client is None:
+        if ctx.message.author.voice:
+            await ctx.message.author.voice.channel.connect()
         else:
-            # Handle the case where arg is a URL
-            url = arg
-            if ctx.voice_client is None:
-                if ctx.message.author.voice:
-                    channel = ctx.message.author.voice.channel
-                    await channel.connect()
-                else:
-                    await ctx.send("The bot is not in a voice channel and you are not in one either.")
-                    return
-
-            if ctx.voice_client:
-                # Stop currently playing audio if any
-                if ctx.voice_client.is_playing():
-                    ctx.voice_client.stop()
-
-                async with ctx.typing():
-                    title = await get_stream_title(url)
-                    if title:
-                        player = discord.FFmpegPCMAudio(url, **ffmpeg_options)
-                        ctx.voice_client.play(player, after=lambda e: print(f'Player error: {e}') if e else None)
-                        await update_discord_activity(title)
-                        await ctx.send(f"Now playing stream: {title}")
-
-                        # Ensure the presence update task is running and not restarted
-                        if not update_presence.is_running():
-                            update_presence.start()  # Start the task to update presence every 2 minutes
-                    else:
-                        await ctx.send("Error fetching stream title.")
+            await ctx.send("The bot is not in a voice channel and you are not in one either.")
+            return
+    if ctx.voice_client:
+        if ctx.voice_client.is_playing():
+            ctx.voice_client.stop()
+        if arg.isdigit():
+            index = int(arg)
+            station_names = list(radio_stations.keys())
+            if 1 <= index <= len(station_names):
+                station_name = station_names[index - 1]
+                url = radio_stations[station_name]
             else:
-                await ctx.send("Error connecting the voice client.")
+                await ctx.send("Invalid station number.")
+                return
+        else:
+            url = arg
+        async with ctx.typing():
+            title = await get_stream_title(url)
+            if title:
+                player = discord.FFmpegPCMAudio(url, **ffmpeg_options)
+                ctx.voice_client.play(player, after=lambda e: print(f'Player error: {e}') if e else None)
+                await ctx.send(f"Now playing: {station_name if arg.isdigit() else title}")
+            else:
+                await ctx.send("Error fetching stream title.")
     else:
-        await ctx.send("Please provide either a station index or a stream URL.")
+        await ctx.send("Error connecting the voice client.")
 
 @bot.command(name='setdefault', help='Updates the default stream URL in the configuration file')
 @commands.check(lambda ctx: ctx.channel.id == channel_id and any(role.id in allowed_role_ids for role in ctx.author.roles))
@@ -317,8 +305,7 @@ async def setdefault(ctx, url: str):
     config.set('settings', 'default_stream_url', url)
     with open('config.ini', 'w') as configfile:
         config.write(configfile)
-    global default_stream_url
-    default_stream_url = url
+    load_config()
     await ctx.send(f"Default stream URL updated to: {url}")
 
 @bot.command(name='restart', help='Restarts the bot')
@@ -331,125 +318,39 @@ async def restart(ctx):
 @bot.command(name='reload', help='Reloads the configuration file')
 @commands.check(lambda ctx: ctx.channel.id == channel_id and any(role.id in allowed_role_ids for role in ctx.author.roles))
 async def reload(ctx):
-    global config
-    global radio_stations
     try:
-        # Reload the configuration file
-        config.read('config.ini')
-        # Reload the radio stations
-        radio_stations = load_radio_stations()
+        load_config()
         await ctx.send("Configuration reloaded successfully.")
     except Exception as e:
         await ctx.send(f"Error reloading configuration: {str(e)}")
         print(f"Error reloading configuration: {str(e)}")
 
-@bot.command(name='commands', help='Displays this help message')
+@bot.command(name='commands', help='Shows available commands')
 async def commands_list(ctx):
     if ctx.channel.id != channel_id:
-        await ctx.send("You cannot use this command in this channel. Please use the designated control channel.")
+        await ctx.send("You can't use this command here. Please use the designated channel.")
         return
-
-    # Create an Embed object
-    embed = discord.Embed(title="Available Commands", description="Here are the available commands you can use:", color=discord.Color.blue())
-
+    embed = discord.Embed(title="Available Commands", description="Here are the available commands:", color=discord.Color.blue())
     commands_list = [
-    {
-        "name": "join",
-        "description": "Joins a voice channel",
-        "usage": ""
-    },
-    {
-        "name": "leave",
-        "description": "Leaves the voice channel",
-        "usage": ""
-    },
-    {
-        "name": "play",
-        "description": "Plays a selected radio station by index",
-        "usage": "<index>"
-    },
-    {
-        "name": "stop",
-        "description": "Stops the playback",
-        "usage": ""
-    },
-    {
-        "name": "vol",
-        "description": "Adjusts the playback volume",
-        "usage": "<volume (0-100)>"
-    },
-    {
-        "name": "setdefault",
-        "description": "Updates the default stream URL in the configuration file",
-        "usage": "<url>"
-    },
-    {
-        "name": "stations",
-        "description": "Displays a list of available radio stations",
-        "usage": ""
-    },
-    {
-        "name": "add",
-        "description": "Adds a new radio station to the configuration file",
-        "usage": "<name> <url>"
-    },
-    {
-        "name": "remove",
-        "description": "Removes a radio station from the configuration file",
-        "usage": "<index>"
-    },
-    {
-        "name": "restart",
-        "description": "Restarts the bot",
-        "usage": ""
-    }
-]
-
+        {"name": "join", "description": "Joins a voice channel", "usage": ""},
+        {"name": "leave", "description": "Leaves the voice channel", "usage": ""},
+        {"name": "play", "description": "Plays a radio station by index", "usage": "<index>"},
+        {"name": "stop", "description": "Stops the playback", "usage": ""},
+        {"name": "vol", "description": "Adjusts the volume", "usage": "<volume (0-100)>"},
+        {"name": "setdefault", "description": "Updates the default stream URL", "usage": "<url>"},
+        {"name": "radio", "description": "Shows available radio stations", "usage": ""},
+        {"name": "add", "description": "Adds a new radio station", "usage": "<name> <url>"},
+        {"name": "remove", "description": "Removes a radio station", "usage": "<index>"},
+        {"name": "restart", "description": "Restarts the bot", "usage": ""},
+        {"name": "stats", "description": "Shows bot statistics", "usage": ""}
+    ]
     for cmd in commands_list:
         usage = f"Usage: `!{cmd['name']} {cmd['usage']}`" if cmd['usage'] else ""
         embed.add_field(name=f"!{cmd['name']}", value=f"{cmd['description']}\n{usage}", inline=False)
-
     await ctx.send(embed=embed)
 
-# Globale Variable für den aktuellen Sender
-current_station = "None"
-current_title = "Nothing is currently playing"
-
-@tasks.loop(minutes=2)
-async def update_status():
-    global current_title, current_station
-    if bot.voice_clients and bot.voice_clients[0].is_playing():
-        title = await get_stream_title(default_stream_url)
-        if title:
-            current_title = title
-        # Stattdessen den aktuellen Sender aus den vorhandenen Informationen ermitteln
-        current_station = next((name for name, url in radio_stations.items() if url == default_stream_url), "Unknown")
-    else:
-        current_station = "None"
-        current_title = "Nothing is currently playing"
-
-@bot.event
-async def on_ready():
-    print(f'Logged in as {bot.user.name}')
-    
-    default_channel = bot.get_channel(default_voice_channel_id)
-    if default_channel:
-        if not default_channel.guild.voice_client:
-            await default_channel.connect()
-        
-        if bot.voice_clients[0]:
-            title = await get_stream_title(default_stream_url)
-            if title:
-                player = discord.FFmpegPCMAudio(default_stream_url, **ffmpeg_options)
-                bot.voice_clients[0].play(player, after=lambda e: print(f'Player error: {e}') if e else None)
-                await update_discord_activity(title)
-                
-                if not update_presence.is_running():
-                    update_presence.start()
-                
-                # Start the status update task
-                if not update_status.is_running():
-                    update_status.start()
+current_station = "No station playing"
+current_title = "No title available"
 
 @bot.command(name='status', help='Zeigt den aktuellen Sender und das gerade gespielte Lied an')
 @commands.check(lambda ctx: ctx.channel.id == channel_id and any(role.id in allowed_role_ids for role in ctx.author.roles))
@@ -458,24 +359,34 @@ async def status(ctx):
     embed.add_field(name="Station", value=current_station, inline=False)
     embed.add_field(name="Title", value=current_title, inline=False)
     embed.set_footer(text="Use !help for more commands")
-    
     await ctx.send(embed=embed)
 
+async def remove_station_callback(interaction, index):
+    try:
+        station_names = list(radio_stations.keys())
+        if 1 <= index <= len(station_names):
+            station_name = station_names[index - 1]
+            name_key, url_key = f'station{index}_name', f'station{index}_url'
+            if config.has_section('radio_stations'):
+                if config.has_option('radio_stations', name_key):
+                    config.remove_option('radio_stations', name_key)
+                if config.has_option('radio_stations', url_key):
+                    config.remove_option('radio_stations', url_key)
+            with open('config.ini', 'w') as configfile:
+                config.write(configfile)
+            load_config()
+            await interaction.response.send_message(f"Removed station: {station_name}")
+        else:
+            await interaction.response.send_message("Invalid station number.")
+    except Exception as e:
+        await interaction.response.send_message(f"An error occurred: {str(e)}")
+
 @bot.command(name='vol', help='Adjusts the playback volume')
-@is_allowed_channel_and_role()
+@commands.check(lambda ctx: ctx.channel.id == channel_id and any(role.id in allowed_role_ids for role in ctx.author.roles))
 async def vol(ctx, volume: int):
     if ctx.voice_client and ctx.voice_client.is_playing():
         if 0 <= volume <= 100:
-            # Stoppen Sie die aktuelle Wiedergabe
-            ctx.voice_client.stop()
-            
-            # Erstellen Sie eine neue Audioquelle mit der angepassten Lautstärke
-            source = discord.PCMVolumeTransformer(discord.FFmpegPCMAudio(default_stream_url, **ffmpeg_options))
-            source.volume = volume / 100.0
-            
-            # Starten Sie die Wiedergabe mit der neuen Quelle
-            ctx.voice_client.play(source, after=lambda e: print(f'Player error: {e}') if e else None)
-            
+            ctx.voice_client.source.volume = volume / 100.0
             await ctx.send(f"Volume set to {volume}%")
         else:
             await ctx.send("Volume must be between 0 and 100")
@@ -487,10 +398,8 @@ async def vol(ctx, volume: int):
 async def join(ctx):
     if ctx.voice_client:
         await ctx.voice_client.disconnect()
-    
     if ctx.message.author.voice:
-        channel = ctx.message.author.voice.channel
-        await channel.connect()
+        await ctx.message.author.voice.channel.connect()
     else:
         default_channel = bot.get_channel(default_voice_channel_id)
         if default_channel:
@@ -511,9 +420,22 @@ async def leave(ctx):
 async def stop(ctx):
     if ctx.voice_client:
         ctx.voice_client.stop()
-        await update_discord_activity('Stopped')
     else:
         await ctx.send("I am not playing anything!")
+
+@bot.command(name='stats', help='Zeigt Statistiken über den Bot')
+@commands.check(lambda ctx: ctx.channel.id == channel_id and any(role.id in allowed_role_ids for role in ctx.author.roles))
+async def stats(ctx):
+    embed = discord.Embed(color=0xFFFFFF)
+    embed.add_field(name=":robot: Client", value="┕`🟢 Online!`", inline=True)
+    embed.add_field(name="⌛ Ping", value=f"┕`{round(bot.latency * 1000)}ms`", inline=True)
+    embed.add_field(name=":file_cabinet: Memory", value=f"┕`{round(psutil.Process().memory_info().rss / 1024 ** 2, 2)}mb`", inline=True)
+    embed.add_field(name=":robot: Version", value=f"┕`v{pkg_resources.get_distribution('discord.py').version}`", inline=True)
+    embed.add_field(name=":blue_book: Discord.py", value=f"┕`v{discord.__version__}`", inline=True)
+    embed.add_field(name=":green_book: Python", value=f"┕`{platform.python_version()}`", inline=True)
+    embed.set_footer(text=f"Requested By {ctx.author.name}", icon_url=ctx.author.avatar.url)
+    embed.timestamp = ctx.message.created_at
+    await ctx.send(embed=embed)
 
 @bot.event
 async def on_command_error(ctx, error):
@@ -525,4 +447,12 @@ async def on_command_error(ctx, error):
     else:
         await ctx.send(f"An error occurred: {str(error)}")
 
+@bot.event
+async def on_disconnect():
+    print("Bot disconnected. Attempting to reconnect...")
+
+@bot.event
+async def on_resumed():
+    print("Bot reconnected successfully.")
+    
 bot.run(token)
