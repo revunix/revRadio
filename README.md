@@ -111,7 +111,3 @@ The bot uses Discord Rich Presence to show the current song title. Ensure that t
 ## Contributing
 
 Feel free to submit issues or pull requests if you have suggestions or improvements.
-
----
-
-Refer to the previous version at [GitHub](https://raw.githubusercontent.com/revunix/Discord-Radio-Bot/main/README.md) for comparison.
