@@ -4,3 +4,7 @@ yt-dlp
 pynacl
 pypresence
 requests
+aiohttp
+psutil
+configparser
+setuptools
