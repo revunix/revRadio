@@ -8,7 +8,7 @@ A simple Discord bot that streams radio stations in voice channels and updates i
 - **Volume Control**: Adjusts playback volume with a simple command.
 - **Custom Help Command**: Provides a list of available commands with a user-friendly interface.
 - **Discord Rich Presence**: Displays the current song title in Discord Rich Presence.
-- **Automatic Presence Update**: Updates Rich Presence every 2 minutes with the current song title.
+- **Automatic Presence Update**: Updates Rich Presence every 30 seconds with the current song title.
 - **Role-based Permissions**: Commands are restricted to users with specific roles.
 - **Channel Restriction**: Commands can only be used in a designated control channel.
 - **Join and Leave Voice Channels**: Commands to join or leave voice channels.
@@ -16,8 +16,9 @@ A simple Discord bot that streams radio stations in voice channels and updates i
 - **Adjust Playback Volume**: Adjust the volume of the bot's audio playback.
 - **Update Default Stream URL**: Change the default stream URL used by the bot.
 - **Add and List Radio Stations**: Add new radio stations to the configuration and list available stations.
+- **Fetch Cover Image**: Fetches cover images from Spotify for the currently playing track.
 
-### Commands
+## Commands
 
 - `!join`: Joins a voice channel.
 - `!leave`: Leaves the voice channel.
@@ -27,33 +28,30 @@ A simple Discord bot that streams radio stations in voice channels and updates i
 - `!setdefault <url>`: Updates the default stream URL in the configuration.
 - `!stations`: Displays a list of available radio stations with indices.
 - `!add <name> <url>`: Adds a new radio station to the configuration.
-- `!remove <index>`: Removes a radio station from the configuration file.
+- `!remove`: Removes a radio station from the configuration file.
 - `!restart`: Restarts the bot.
+- `!reload`: Reloads the configuration file.
 - `!commands`: Displays the list of available commands.
+- `!status`: Shows the current station and playing title.
+- `!stats`: Shows bot statistics.
 
 ## Setup
 
 1. **Clone the Repository**
-
     ```bash
     git clone https://github.com/revunix/discord-radio-bot.git
     cd discord-radio-bot
     ```
 
 2. **Install Dependencies**
-
     Ensure you have Python 3.11 or later installed. Install the required Python packages:
-
     ```bash
     pip install -r requirements.txt
     ```
-
     **Note:** Ensure you have `ffmpeg` installed and accessible in your system's PATH. You can download it from [FFmpeg's official site](https://ffmpeg.org/download.html).
 
 3. **Configure the Bot**
-
     Create a `config.ini` file in the root directory with the following structure:
-
     ```ini
     [settings]
     token = YOUR_BOT_TOKEN
@@ -64,6 +62,11 @@ A simple Discord bot that streams radio stations in voice channels and updates i
     allowed_role_ids = ROLE_ID1,ROLE_ID2
     client_id = YOUR_DISCORD_APPLICATION_CLIENT_ID
 
+    [spotify]
+    client_id = YOUR_SPOTIFY_CLIENT_ID
+    client_secret = YOUR_SPOTIFY_CLIENT_SECRET
+    update_channel_id = YOUR_UPDATE_CHANNEL_ID
+
     [radio_stations]
     station1_name = Cool Radio
     station1_url = http://coolradio.example.com/stream
@@ -72,11 +75,9 @@ A simple Discord bot that streams radio stations in voice channels and updates i
     ```
 
 4. **Run the Bot**
-
     Start the bot with:
-
     ```bash
-    python radio.py
+    python app.py
     ```
 
 ## Docker Setup
@@ -84,17 +85,13 @@ A simple Discord bot that streams radio stations in voice channels and updates i
 To run the bot using Docker, follow these steps:
 
 1. **Build the Docker Image**
-
     In the root directory of your project, build the Docker image:
-
     ```bash
     docker build -t radiobot .
     ```
 
 2. **Run the Docker Container**
-
     Start the container in detached mode:
-
     ```bash
     docker run -d --name radiobot radiobot:latest
     ```
@@ -114,3 +111,7 @@ The bot uses Discord Rich Presence to show the current song title. Ensure that t
 ## Contributing
 
 Feel free to submit issues or pull requests if you have suggestions or improvements.
+
+---
+
+Refer to the previous version at [GitHub](https://raw.githubusercontent.com/revunix/Discord-Radio-Bot/main/README.md) for comparison.
