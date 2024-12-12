@@ -32,7 +32,9 @@ intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # FFmpeg options for audio streaming
-ffmpeg_options = {'options': '-vn'}
+ffmpeg_options = {
+    'options': '-vn'  # Remove -re from here
+}
 
 # Function to load configuration settings
 def load_config():
@@ -58,10 +60,18 @@ def load_config():
 # Load configuration settings
 load_config()
 
-# Function to get the stream title using FFmpeg
+# In der Funktion, die den Stream abspielt, fügen Sie -re hinzu
 async def get_stream_title(url):
     try:
-        process = await asyncio.create_subprocess_exec('ffmpeg', '-i', url, '-f', 'ffmetadata', '-', stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        process = await asyncio.create_subprocess_exec(
+            'ffmpeg', 
+            '-re',  # Place -re here for input
+            '-i', url, 
+            '-f', 'ffmetadata', 
+            '-', 
+            stdout=subprocess.PIPE, 
+            stderr=subprocess.PIPE
+        )
         _, stderr = await process.communicate()
         match = re.search(r'Title\s*:\s*(.*)', stderr.decode())
         return match.group(1).strip() if match else 'Unknown Title'
@@ -97,8 +107,8 @@ async def nickname_change(guild, station_name, bot_user):
 @bot.event
 async def on_ready():
     print(f'Logged in as {bot.user}')
-    global current_stream_url  # Add this line
-    current_stream_url = default_stream_url  # Add this line
+    global current_stream_url
+    current_stream_url = default_stream_url
     update_activity.start()
     station_name = next((name for name, url in radio_stations.items() if url == default_stream_url), "Unknown Station")
     for guild in bot.guilds:
@@ -107,11 +117,12 @@ async def on_ready():
     if default_channel:
         if not default_channel.guild.voice_client:
             await default_channel.connect()
-        if bot.voice_clients[0]:
+        if default_channel.guild.voice_client and not default_channel.guild.voice_client.is_playing():
             title = await get_stream_title(default_stream_url)
             if title:
                 player = discord.FFmpegPCMAudio(default_stream_url, **ffmpeg_options)
-                bot.voice_clients[0].play(player, after=lambda e: print(f'Player error: {e}') if e else None)
+                default_channel.guild.voice_client.play(player, after=lambda e: print(f'Player error: {e}') if e else None)
+
 
 # Store the current stream URL
 current_stream_url = default_stream_url
@@ -264,16 +275,33 @@ async def stations(ctx):
         await ctx.send("No radio stations available.")
         return
 
+    # Filter out the currently playing station
+    current_station_name = next((name for name, url in radio_stations.items() if url == current_stream_url), None)
+
+    # Create options for the dropdown, excluding the currently playing station
     options = [
         discord.SelectOption(label=station_name, value=str(index))
         for index, station_name in enumerate(radio_stations.keys(), start=1)
+        if station_name != current_station_name  # Exclude the currently playing station
     ]
 
     select = discord.ui.Select(placeholder="Choose a radio station...", options=options)
 
     async def select_callback(interaction):
         index = int(select.values[0])
-        await play_station_callback(interaction, index)
+        station_names = list(radio_stations.keys())
+        station_name = station_names[index - 1]  # Get the selected station name
+        url = radio_stations[station_name]  # Get the URL of the selected station
+
+        # Check if the selected station is different from the current one
+        if current_stream_url != url:
+            # Quick response to the interaction
+            await interaction.response.send_message(f"Now playing: {station_name}", ephemeral=True)  # Ephemeral, only visible to the user
+            
+            # Play the selected station without sending another response
+            await play_station_callback(interaction, index, station_name)  # Pass station_name to avoid sending another message
+        else:
+            await interaction.response.send_message(f"Already playing: {station_name}", ephemeral=True)
 
     select.callback = select_callback
     view = discord.ui.View()
@@ -282,21 +310,18 @@ async def stations(ctx):
     embed = discord.Embed(title="Available Radio Stations", description="Select a station from the dropdown menu", color=discord.Color.blue())
     await ctx.send(embed=embed, view=view)
 
-# Callback function to handle station playback
-async def play_station_callback(interaction, index):
+async def play_station_callback(interaction, index, station_name):
     global current_stream_url
     
-    # Verbindung zum Voice-Channel sicherstellen
-    if interaction.user.guild.voice_client is None:
+    if interaction.guild.voice_client is None:
         if interaction.user.voice:
             await interaction.user.voice.channel.connect()
         else:
-            await interaction.response.send_message("You are not connected to a voice channel.")
-            return
+            return  # No response needed, user not in a voice channel
     
     # Voice Client vorhanden
     if interaction.guild.voice_client:
-        # Aktuellen Stream stoppen
+        # Aktuellen Stream stoppen, falls er spielt
         if interaction.guild.voice_client.is_playing():
             interaction.guild.voice_client.stop()
         
@@ -304,8 +329,7 @@ async def play_station_callback(interaction, index):
         
         # Gültige Station prüfen
         if 1 <= index <= len(station_names):
-            station_name = station_names[index - 1]
-            url = radio_stations[station_name]
+            url = radio_stations[station_name]  # Get the URL of the selected station
             
             # Nur bei Änderung des Streams
             if current_stream_url != url:
@@ -313,36 +337,21 @@ async def play_station_callback(interaction, index):
                 
                 async with interaction.channel.typing():
                     try:
-                        title = await get_stream_title(url)
+                        # Hier wird der Stream abgespielt
+                        player = discord.FFmpegPCMAudio(url, **ffmpeg_options)  # ffmpeg_options ohne -re
+                        interaction.guild.voice_client.play(player, after=lambda e: print(f'Player error: {e}') if e else None)
                         
-                        def after_playing(error):
-                            if error:
-                                print(f"Playback error: {error}")
-                            
-                            # Nutze bot.loop für Thread-sicheren Aufruf
-                            bot.loop.create_task(
-                                check_and_restart_stream(interaction.guild, url)
-                            )
-                        
-                        # Audio-Player erstellen
-                        player = discord.FFmpegPCMAudio(url, **ffmpeg_options)
-                        interaction.guild.voice_client.play(player, after=after_playing)
-                        
-                        # Antworten und Nickname aktualisieren
-                        await interaction.response.send_message(f"Now playing: {station_name}")
+                        # Nickname aktualisieren
                         await nickname_change(interaction.guild, station_name, interaction.guild.me)
                     
                     except Exception as e:
-                        await interaction.response.send_message(f"Error starting stream: {str(e)}")
-            
+                        print(f"Error starting stream: {str(e)}")  # Log the error, no need to respond again
             else:
-                await interaction.response.send_message(f"Already playing: {station_name}")
-        
+                print(f"Already playing: {station_name}")  # Log the message, no need to respond again
         else:
-            await interaction.response.send_message("Invalid station number.")
-    
+            print("Invalid station number.")  # Log the message, no need to respond again
     else:
-        await interaction.response.send_message("Error connecting the voice client.")
+        print("Error connecting the voice client.")  # Log the message, no need to respond again
 
 # Function to check if the stream has stopped and restart it
 async def check_and_restart_stream(guild, url):
