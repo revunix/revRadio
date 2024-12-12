@@ -1,6 +1,6 @@
 # Discord Radio Bot
 
-A simple Discord bot that streams radio stations in voice channels and updates its status with the current song title. This bot can join a voice channel, play a specified radio stream, adjust volume, and provide a custom help command for bot commands. It integrates with Discord Rich Presence to display the currently playing song.
+A simple Discord bot that streams radio stations in voice channels and updates its status with the current song title. This bot can join a voice channel, play a specified radio stream, adjust volume, and provide a custom help command for bot commands. It integrates with Discord Rich Presence to display the currently playing song and features automatic recovery from disconnections.
 
 ## Features
 
@@ -8,7 +8,7 @@ A simple Discord bot that streams radio stations in voice channels and updates i
 - **Volume Control**: Adjusts playback volume with a simple command.
 - **Custom Help Command**: Provides a list of available commands with a user-friendly interface.
 - **Discord Rich Presence**: Displays the current song title in Discord Rich Presence.
-- **Automatic Presence Update**: Updates Rich Presence every 30 seconds with the current song title.
+- **Automatic Presence Update**: Updates Rich Presence every 120 seconds with the current song title.
 - **Role-based Permissions**: Commands are restricted to users with specific roles.
 - **Channel Restriction**: Commands can only be used in a designated control channel.
 - **Join and Leave Voice Channels**: Commands to join or leave voice channels.
@@ -17,6 +17,11 @@ A simple Discord bot that streams radio stations in voice channels and updates i
 - **Update Default Stream URL**: Change the default stream URL used by the bot.
 - **Add and List Radio Stations**: Add new radio stations to the configuration and list available stations.
 - **Fetch Cover Image**: Fetches cover images from Spotify for the currently playing track.
+- **Auto-Reconnect**: Automatically reconnects and resumes playback when disconnected.
+- **Stream State Management**: Maintains stream state across channel moves and reconnections.
+- **Enhanced Error Handling**: Better error feedback and recovery mechanisms.
+- **Automatic Stream Recovery**: Recovers stream playback when moved between channels.
+- **Dynamic Nickname Updates**: Updates bot nickname to reflect current station.
 
 ## Commands
 
@@ -26,14 +31,15 @@ A simple Discord bot that streams radio stations in voice channels and updates i
 - `!stop`: Stops the playback.
 - `!vol <volume>`: Adjusts the playback volume (0-100).
 - `!setdefault <url>`: Updates the default stream URL in the configuration.
-- `!stations`: Displays a list of available radio stations with indices.
+- `!radio`: Shows an interactive menu of available radio stations.
 - `!add <name> <url>`: Adds a new radio station to the configuration.
-- `!remove`: Removes a radio station from the configuration file.
+- `!remove`: Shows an interactive menu to remove radio stations.
 - `!restart`: Restarts the bot.
 - `!reload`: Reloads the configuration file.
 - `!commands`: Displays the list of available commands.
 - `!status`: Shows the current station and playing title.
 - `!stats`: Shows bot statistics.
+- `!fix`: Fixes stream playback issues by restarting the current stream.
 
 ## Setup
 
@@ -98,15 +104,25 @@ To run the bot using Docker, follow these steps:
 
 This will create and run a Docker container with your bot, including FFmpeg for streaming.
 
-## Rich Presence
+## Rich Presence and Status Updates
 
-The bot uses Discord Rich Presence to show the current song title. Ensure that the `client_id` in your `config.ini` is set correctly for Rich Presence to work.
+The bot uses Discord Rich Presence to show the current song title and updates its status every 120 seconds. It also maintains a dedicated update channel where it posts currently playing tracks with cover art from Spotify.
+
+## New Features in v1.1.1
+
+- **Auto-Reconnect**: Bot now automatically reconnects when disconnected
+- **Stream Recovery**: Maintains playback state when moved between channels
+- **Enhanced Stability**: Better error handling and recovery mechanisms
+- **Interactive Menus**: New dropdown and button interfaces for station selection
+- **Improved Status Updates**: More reliable song title and cover art updates
 
 ## Troubleshooting
 
 - **Bot not updating Rich Presence**: Ensure that Discord is running and that you have set the correct `client_id` in `config.ini`.
 - **Bot not joining the voice channel**: Verify that the bot has the necessary permissions and that the `default_voice_channel_id` is correct.
+- **Stream interruptions**: Use the `!fix` command to restart the current stream if you experience playback issues.
 - **Error installing dependencies**: Ensure you have Python 3.11 or later and that `ffmpeg` is properly installed.
+- **Bot disconnecting**: The bot will now automatically attempt to reconnect and resume playback.
 
 ## Contributing
 
