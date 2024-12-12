@@ -46,7 +46,7 @@ A versatile Discord bot for streaming radio stations with advanced stream manage
 - `!stats`: Shows bot statistics
 - `!fix`: Resolves stream playback issues
 
-## New in v1.2.0 - Stream Resilience and Management Update
+## New in v1.2.1 - Stream Resilience and Management Update
 
 - **Improved Stream Handling**
   * More robust async event loop management
@@ -54,7 +54,7 @@ A versatile Discord bot for streaming radio stations with advanced stream manage
   * Thread-safe coroutine execution
 
 - **New Features**
-  * `!listradio` command to display all stations
+  * Officially named the bot **revRadio**
   * Comprehensive error logging
   * Informative embed messages
   * Improved configuration management
