@@ -28,7 +28,7 @@ def load_config():
     default_volume_percentage = int(config['settings']['default_volume'])
     allowed_role_ids = list(map(int, config['settings']['allowed_role_ids'].split(',')))
     client_id = config['settings']['client_id']
-    
+
     # Modified radio_stations loading to handle potential KeyErrors
     radio_stations = {}
     for s in config.sections():
@@ -81,6 +81,8 @@ async def nickname_change(guild, station_name, bot_user):
 @bot.event
 async def on_ready():
     print(f'Logged in as {bot.user}')
+    global current_stream_url  # Add this line
+    current_stream_url = default_stream_url  # Add this line
     update_activity.start()
     station_name = next((name for name, url in radio_stations.items() if url == default_stream_url), "Unknown Station")
     for guild in bot.guilds:
@@ -104,23 +106,23 @@ async def update_activity():
     try:
         title = await get_stream_title(current_stream_url)  # Use current_stream_url instead of default_stream_url
         track_name = f"{title}"
-        
+
         # Fetch cover image from Spotify
         cover_url = await fetch_cover_image_url(title)
-        
+
         # Create rich presence without cover image
         activity = discord.Activity(
             type=discord.ActivityType.listening,
             name=track_name
         )
-        
+
         # Check if the title has changed
         if bot.activity and bot.activity.name == track_name:
             print("The track is already set, skipping update.")
             return
-        
+
         await bot.change_presence(activity=activity)
-        
+
         try:
             # Load configuration
             config = configparser.ConfigParser()
@@ -173,7 +175,7 @@ async def fetch_cover_image_url(title):
             )
             auth_data = await auth_response.json()
             access_token = auth_data['access_token']
-            
+
             async with session.get(
                 f"https://api.spotify.com/v1/search?q={title}&type=track",
                 headers={'Authorization': f'Bearer {access_token}'}
@@ -245,22 +247,22 @@ async def stations(ctx):
     if not radio_stations:
         await ctx.send("No radio stations available.")
         return
-    
+
     options = [
         discord.SelectOption(label=station_name, value=str(index))
         for index, station_name in enumerate(radio_stations.keys(), start=1)
     ]
-    
+
     select = discord.ui.Select(placeholder="Choose a radio station...", options=options)
-    
+
     async def select_callback(interaction):
         index = int(select.values[0])
         await play_station_callback(interaction, index)
-    
+
     select.callback = select_callback
     view = discord.ui.View()
     view.add_item(select)
-    
+
     embed = discord.Embed(title="Available Radio Stations", description="Select a station from the dropdown menu", color=discord.Color.blue())
     await ctx.send(embed=embed, view=view)
 
@@ -286,7 +288,7 @@ async def play_station_callback(interaction, index):
                     title = await get_stream_title(url)
                     if title:
                         player = discord.FFmpegPCMAudio(url, **ffmpeg_options)
-                        interaction.guild.voice_client.play(player, after=lambda e: print(f'Player error: {e}') if e else None)
+                        interaction.guild.voice_client.play(player, after=lambda e: asyncio.create_task(check_and_restart_stream(interaction.guild, url)))  # Create task for coroutine
                         await interaction.response.send_message(f"Now playing: {station_name}")
                         await nickname_change(interaction.guild, station_name, interaction.guild.me)  # Change bot name after switching station
                     else:
@@ -297,6 +299,13 @@ async def play_station_callback(interaction, index):
             await interaction.response.send_message("Invalid station number.")
     else:
         await interaction.response.send_message("Error connecting the voice client.")
+
+# Function to check if the stream has stopped and restart it
+async def check_and_restart_stream(guild, url):
+    if not guild.voice_client.is_playing():
+        print("Stream has stopped. Restarting...")
+        player = discord.FFmpegPCMAudio(url, **ffmpeg_options)
+        guild.voice_client.play(player, after=lambda e: asyncio.create_task(check_and_restart_stream(guild, url)))  # Create task for coroutine
 
 # Command to play a selected radio station by index or a radio stream URL
 @bot.command(name='play', help='Plays a selected radio station by index or a radio stream URL')
@@ -326,7 +335,7 @@ async def play(ctx, arg):
             title = await get_stream_title(url)
             if title:
                 player = discord.FFmpegPCMAudio(url, **ffmpeg_options)
-                ctx.voice_client.play(player, after=lambda e: print(f'Player error: {e}') if e else None)
+                ctx.voice_client.play(player, after=lambda e: asyncio.create_task(check_and_restart_stream(ctx.guild, url)))  # Create task for coroutine
                 await ctx.send(f"Now playing: {station_name if arg.isdigit() else title}")
             else:
                 await ctx.send("Error fetching stream title.")
@@ -380,7 +389,8 @@ async def commands_list(ctx):
         {"name": "add", "description": "Adds a new radio station", "usage": "<name> <url>"},
         {"name": "remove", "description": "Removes a radio station", "usage": "<index>"},
         {"name": "restart", "description": "Restarts the bot", "usage": ""},
-        {"name": "stats", "description": "Shows bot statistics", "usage": ""}
+        {"name": "stats", "description": "Shows bot statistics", "usage": ""},
+        {"name": "fix", "description": "Reloads the current station", "usage": ""}
     ]
     for cmd in commands_list:
         usage = f"Usage: `!{cmd['name']} {cmd['usage']}`" if cmd['usage'] else ""
@@ -468,6 +478,48 @@ async def stop(ctx):
     else:
         await ctx.send("I am not playing anything!")
 
+# Command to fix the FFmpeg stream
+@bot.command(name='fix', help='Fixes the FFmpeg stream by restarting it with the current URL or starts default stream')
+@commands.check(lambda ctx: ctx.channel.id == channel_id and any(role.id in allowed_role_ids for role in ctx.author.roles))
+async def fix_stream(ctx):
+    global current_stream_url
+    
+    if not ctx.voice_client:
+        # Connect to voice if not connected
+        if ctx.author.voice:
+            await ctx.author.voice.channel.connect()
+        else:
+            default_channel = bot.get_channel(default_voice_channel_id)
+            if default_channel:
+                await default_channel.connect()
+            else:
+                await ctx.send("Cannot connect to voice channel!")
+                return
+
+    # Stop current playback if any
+    if ctx.voice_client.is_playing():
+        ctx.voice_client.stop()
+    
+    await asyncio.sleep(1)  # Wait a moment before restarting
+    
+    # If no current stream is set, use default
+    if not current_stream_url:
+        current_stream_url = default_stream_url
+        await ctx.send("No current stream found, starting default station.")
+    
+    # Start playback
+    try:
+        player = discord.FFmpegPCMAudio(current_stream_url, **ffmpeg_options)
+        ctx.voice_client.play(player, after=lambda e: check_and_restart_stream(ctx.guild, current_stream_url))
+        
+        # Update station name
+        station_name = next((name for name, url in radio_stations.items() if url == current_stream_url), "Unknown Station")
+        await nickname_change(ctx.guild, station_name, ctx.guild.me)
+        
+        await ctx.send(f"Stream restarted: {station_name}")
+    except Exception as e:
+        await ctx.send(f"Error starting stream: {str(e)}")
+
 # Command to show bot statistics
 @bot.command(name='stats', help='Shows bot statistics')
 @commands.check(lambda ctx: ctx.channel.id == channel_id and any(role.id in allowed_role_ids for role in ctx.author.roles))
@@ -487,7 +539,7 @@ async def stats(ctx):
 @bot.event
 async def on_command_error(ctx, error):
     print(f"An error occurred: {str(error)}")
-    
+
     if isinstance(error, commands.CheckFailure):
         # Handle CheckFailure separately to avoid duplicate messages
         await ctx.send("You cannot use this command in this channel or you don't have permission to use this command.")
@@ -503,6 +555,35 @@ async def on_disconnect():
 @bot.event
 async def on_resumed():
     print("Bot reconnected successfully.")
-    
+
+@bot.event
+async def on_voice_state_update(member, before, after):
+    # Check if the bot was moved
+    if member.id == bot.user.id:
+        # If the bot was moved to a different channel (not disconnected)
+        if before.channel is not None and after.channel is not None:
+            if before.channel.id != after.channel.id:
+                # Continue playing in the new channel
+                if member.guild.voice_client and member.guild.voice_client.is_playing():
+                    # Keep the current stream playing
+                    return
+                else:
+                    # Restart the stream if it's not playing
+                    player = discord.FFmpegPCMAudio(current_stream_url, **ffmpeg_options)
+                    member.guild.voice_client.play(player, after=lambda e: asyncio.create_task(check_and_restart_stream(member.guild, current_stream_url)))
+        # If the bot was disconnected (after.channel is None)
+        elif after.channel is None:
+            # Try to reconnect to the default channel
+            try:
+                default_channel = bot.get_channel(default_voice_channel_id)
+                if default_channel:
+                    await default_channel.connect()
+                    if member.guild.voice_client:
+                        player = discord.FFmpegPCMAudio(current_stream_url, **ffmpeg_options)
+                        member.guild.voice_client.play(player, after=lambda e: asyncio.create_task(check_and_restart_stream(member.guild, current_stream_url)))
+            except Exception as e:
+                print(f"Error reconnecting to voice channel: {e}")
+
+
 # Run the bot with the token
 bot.run(token)
