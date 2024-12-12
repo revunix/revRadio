@@ -1,18 +1,34 @@
+# Core Discord Functionality
 import discord
 from discord.ext import commands, tasks
 from discord.ui import Button, View
-import asyncio, configparser, subprocess, re, os, sys, psutil, pkg_resources, platform, aiohttp, base64, json
+
+# Essential System and Helper Libraries
+import asyncio
+import configparser
+import subprocess
+import re
+import os
+import sys
+
+# For System Information (only needed for !stats)
+import psutil
+import platform
+import pkg_resources
+
+# For Spotify Integration
+import aiohttp
+import base64
+
+# For Timestamps
+import datetime
 
 # Load configuration file
 config = configparser.ConfigParser()
 config.read('config.ini')
 
-# Set up bot intents
-intents = discord.Intents.default()
-intents.message_content = True
-intents.guilds = True
-intents.members = True
-intents.presences = True
+# Set up bot intents to include all functionalities
+intents = discord.Intents.all()
 bot = commands.Bot(command_prefix="!", intents=intents)
 
 # FFmpeg options for audio streaming
@@ -268,44 +284,100 @@ async def stations(ctx):
 
 # Callback function to handle station playback
 async def play_station_callback(interaction, index):
-    global current_stream_url  # Add this line to modify the global variable
+    global current_stream_url
+    
+    # Verbindung zum Voice-Channel sicherstellen
     if interaction.user.guild.voice_client is None:
         if interaction.user.voice:
             await interaction.user.voice.channel.connect()
         else:
             await interaction.response.send_message("You are not connected to a voice channel.")
             return
+    
+    # Voice Client vorhanden
     if interaction.guild.voice_client:
+        # Aktuellen Stream stoppen
         if interaction.guild.voice_client.is_playing():
             interaction.guild.voice_client.stop()
+        
         station_names = list(radio_stations.keys())
+        
+        # Gültige Station prüfen
         if 1 <= index <= len(station_names):
             station_name = station_names[index - 1]
             url = radio_stations[station_name]
-            if current_stream_url != url:  # Only change if the station has changed
-                current_stream_url = url  # Update the current stream URL
+            
+            # Nur bei Änderung des Streams
+            if current_stream_url != url:
+                current_stream_url = url
+                
                 async with interaction.channel.typing():
-                    title = await get_stream_title(url)
-                    if title:
+                    try:
+                        title = await get_stream_title(url)
+                        
+                        def after_playing(error):
+                            if error:
+                                print(f"Playback error: {error}")
+                            
+                            # Nutze bot.loop für Thread-sicheren Aufruf
+                            bot.loop.create_task(
+                                check_and_restart_stream(interaction.guild, url)
+                            )
+                        
+                        # Audio-Player erstellen
                         player = discord.FFmpegPCMAudio(url, **ffmpeg_options)
-                        interaction.guild.voice_client.play(player, after=lambda e: asyncio.create_task(check_and_restart_stream(interaction.guild, url)))  # Create task for coroutine
+                        interaction.guild.voice_client.play(player, after=after_playing)
+                        
+                        # Antworten und Nickname aktualisieren
                         await interaction.response.send_message(f"Now playing: {station_name}")
-                        await nickname_change(interaction.guild, station_name, interaction.guild.me)  # Change bot name after switching station
-                    else:
-                        await interaction.response.send_message("Error fetching stream title.")
+                        await nickname_change(interaction.guild, station_name, interaction.guild.me)
+                    
+                    except Exception as e:
+                        await interaction.response.send_message(f"Error starting stream: {str(e)}")
+            
             else:
                 await interaction.response.send_message(f"Already playing: {station_name}")
+        
         else:
             await interaction.response.send_message("Invalid station number.")
+    
     else:
         await interaction.response.send_message("Error connecting the voice client.")
 
 # Function to check if the stream has stopped and restart it
 async def check_and_restart_stream(guild, url):
-    if not guild.voice_client.is_playing():
-        print("Stream has stopped. Restarting...")
-        player = discord.FFmpegPCMAudio(url, **ffmpeg_options)
-        guild.voice_client.play(player, after=lambda e: asyncio.create_task(check_and_restart_stream(guild, url)))  # Create task for coroutine
+    try:
+        # Überprüfe, ob der Voice Client existiert
+        if not guild.voice_client:
+            print("No voice client available.")
+            return
+
+        # Überprüfe, ob der Stream nicht mehr spielt
+        if not guild.voice_client.is_playing():
+            print(f"Stream stopped. Attempting to restart with URL: {url}")
+            
+            try:
+                # Stoppe zunächst alle aktuellen Streams
+                if guild.voice_client.is_playing():
+                    guild.voice_client.stop()
+                
+                # Kurze Pause vor dem Neustart
+                await asyncio.sleep(1)
+                
+                # Erstelle neuen Audio-Player
+                player = discord.FFmpegPCMAudio(url, **ffmpeg_options)
+                guild.voice_client.play(
+                    player, 
+                    after=lambda e: asyncio.create_task(check_and_restart_stream(guild, url)) if e else None
+                )
+                
+                print(f"Stream restarted successfully: {url}")
+            
+            except Exception as restart_error:
+                print(f"Error restarting stream: {restart_error}")
+        
+    except Exception as e:
+        print(f"Unexpected error in stream check: {e}")
 
 # Command to play a selected radio station by index or a radio stream URL
 @bot.command(name='play', help='Plays a selected radio station by index or a radio stream URL')
@@ -341,6 +413,7 @@ async def play(ctx, arg):
                 await ctx.send("Error fetching stream title.")
     else:
         await ctx.send("Error connecting the voice client.")
+
 
 # Command to update the default stream URL in the configuration file
 @bot.command(name='setdefault', help='Updates the default stream URL in the configuration file')
@@ -411,27 +484,6 @@ async def status(ctx):
     embed.set_footer(text="Use !help for more commands")
     await ctx.send(embed=embed)
 
-# Callback function to handle station removal (duplicate function, should be removed)
-async def remove_station_callback(interaction, index):
-    try:
-        station_names = list(radio_stations.keys())
-        if 1 <= index <= len(station_names):
-            station_name = station_names[index - 1]
-            name_key, url_key = f'station{index}_name', f'station{index}_url'
-            if config.has_section('radio_stations'):
-                if config.has_option('radio_stations', name_key):
-                    config.remove_option('radio_stations', name_key)
-                if config.has_option('radio_stations', url_key):
-                    config.remove_option('radio_stations', url_key)
-            with open('config.ini', 'w') as configfile:
-                config.write(configfile)
-            load_config()
-            await interaction.response.send_message(f"Removed station: {station_name}")
-        else:
-            await interaction.response.send_message("Invalid station number.")
-    except Exception as e:
-        await interaction.response.send_message(f"An error occurred: {str(e)}")
-
 # Command to adjust the playback volume
 @bot.command(name='vol', help='Adjusts the playback volume')
 @commands.check(lambda ctx: ctx.channel.id == channel_id and any(role.id in allowed_role_ids for role in ctx.author.roles))
@@ -484,8 +536,9 @@ async def stop(ctx):
 async def fix_stream(ctx):
     global current_stream_url
     
+    # Überprüfe, ob der Bot in einem Voice-Channel ist
     if not ctx.voice_client:
-        # Connect to voice if not connected
+        # Verbinde mit Voice-Channel, falls nicht verbunden
         if ctx.author.voice:
             await ctx.author.voice.channel.connect()
         else:
@@ -496,45 +549,138 @@ async def fix_stream(ctx):
                 await ctx.send("Cannot connect to voice channel!")
                 return
 
-    # Stop current playback if any
-    if ctx.voice_client.is_playing():
-        ctx.voice_client.stop()
-    
-    await asyncio.sleep(1)  # Wait a moment before restarting
-    
-    # If no current stream is set, use default
+    # Wenn kein aktueller Stream gesetzt ist, nutze Standard-Stream
     if not current_stream_url:
         current_stream_url = default_stream_url
         await ctx.send("No current stream found, starting default station.")
     
-    # Start playback
+    # Starte Playback
     try:
-        player = discord.FFmpegPCMAudio(current_stream_url, **ffmpeg_options)
-        ctx.voice_client.play(player, after=lambda e: check_and_restart_stream(ctx.guild, current_stream_url))
+        def after_playing(error):
+            if error:
+                print(f"Playback error: {error}")
+            
+            # Nutze bot.loop für Thread-sicheren Aufruf
+            bot.loop.create_task(
+                check_and_restart_stream(ctx.guild, current_stream_url)
+            )
+
+        # Stoppe aktuellen Stream, falls vorhanden
+        if ctx.voice_client.is_playing():
+            ctx.voice_client.stop()
         
-        # Update station name
+        # Kurze Pause vor dem Neustart
+        await asyncio.sleep(1)
+        
+        # Erstelle neuen Audio-Player
+        player = discord.FFmpegPCMAudio(current_stream_url, **ffmpeg_options)
+        ctx.voice_client.play(player, after=after_playing)
+        
+        # Aktualisiere Station Name
         station_name = next((name for name, url in radio_stations.items() if url == current_stream_url), "Unknown Station")
         await nickname_change(ctx.guild, station_name, ctx.guild.me)
         
         await ctx.send(f"Stream restarted: {station_name}")
+    
     except Exception as e:
         await ctx.send(f"Error starting stream: {str(e)}")
 
 # Command to show bot statistics
-@bot.command(name='stats', help='Shows bot statistics')
+@bot.command(name='stats', help='Shows bot statistics and system information')
 @commands.check(lambda ctx: ctx.channel.id == channel_id and any(role.id in allowed_role_ids for role in ctx.author.roles))
 async def stats(ctx):
-    embed = discord.Embed(color=0xFFFFFF)
-    embed.add_field(name=":robot: Client", value="┕`🟢 Online!`", inline=True)
-    embed.add_field(name="⌛ Ping", value=f"┕`{round(bot.latency * 1000)}ms`", inline=True)
-    embed.add_field(name=":file_cabinet: Memory", value=f"┕`{round(psutil.Process().memory_info().rss / 1024 ** 2, 2)}mb`", inline=True)
-    embed.add_field(name=":robot: Version", value=f"┕`v{pkg_resources.get_distribution('discord.py').version}`", inline=True)
+    # Get system information
+    cpu_usage = psutil.cpu_percent()
+    memory = psutil.virtual_memory()
+    disk = psutil.disk_usage('/')
+    
+    embed = discord.Embed(title="Bot Statistics & System Information", color=0x00ff00)
+    
+    # Bot Info
+    embed.add_field(name=":robot: Client Status", value="┕`🟢 Online!`", inline=True)
+    embed.add_field(name="⌛ Latency", value=f"┕`{round(bot.latency * 1000)}ms`", inline=True)
+    embed.add_field(name=":file_cabinet: Bot Memory", value=f"┕`{round(psutil.Process().memory_info().rss / 1024 ** 2, 2)}MB`", inline=True)
+    
+    # Versions
+    embed.add_field(name=":robot: Bot Version", value=f"┕`v{pkg_resources.get_distribution('discord.py').version}`", inline=True)
     embed.add_field(name=":blue_book: Discord.py", value=f"┕`v{discord.__version__}`", inline=True)
     embed.add_field(name=":green_book: Python", value=f"┕`{platform.python_version()}`", inline=True)
+    
+    # System Info
+    embed.add_field(name=":desktop: System", value=f"┕`{platform.system()} {platform.release()}`", inline=True)
+    embed.add_field(name=":gear: CPU Usage", value=f"┕`{cpu_usage}%`", inline=True)
+    embed.add_field(name=":bar_chart: RAM Usage", value=f"┕`{memory.percent}% ({round(memory.used/1024**3, 1)}/{round(memory.total/1024**3, 1)}GB)`", inline=True)
+    embed.add_field(name=":cd: Disk Usage", value=f"┕`{disk.percent}% ({round(disk.used/1024**3, 1)}/{round(disk.total/1024**3, 1)}GB)`", inline=True)
+    
+    # Uptime
+    process = psutil.Process()
+    uptime = datetime.datetime.now() - datetime.datetime.fromtimestamp(process.create_time())
+    embed.add_field(name=":clock1: Uptime", value=f"┕`{str(uptime).split('.')[0]}`", inline=True)
+    
     embed.set_footer(text=f"Requested By {ctx.author.name}", icon_url=ctx.author.avatar.url)
     embed.timestamp = ctx.message.created_at
     await ctx.send(embed=embed)
 
+@bot.command(name='listradio', help='Lists all radio stations from the configuration')
+@commands.check(lambda ctx: ctx.channel.id == channel_id and any(role.id in allowed_role_ids for role in ctx.author.roles))
+async def list_radio_stations(ctx):
+    try:
+        # Lese die Konfiguration neu ein, um sicherzustellen, dass die aktuellsten Daten geladen werden
+        config = configparser.ConfigParser()
+        config.read('config.ini')
+        
+        # Sammle Radio-Stationen
+        stations = {}
+        for section in config.sections():
+            if section.startswith('radio_stations'):
+                for i in range(1, len(config[section]) + 1):
+                    name_key = f'station{i}_name'
+                    url_key = f'station{i}_url'
+                    if name_key in config[section] and url_key in config[section]:
+                        stations[config[section][name_key]] = config[section][url_key]
+        
+        # Wenn keine Stationen gefunden wurden
+        if not stations:
+            embed = discord.Embed(
+                title="📻 Radio Stations", 
+                description="No radio stations found in configuration.", 
+                color=discord.Color.red()
+            )
+            await ctx.send(embed=embed)
+            return
+        
+        # Erstelle ein Embed mit allen Stationen
+        embed = discord.Embed(
+            title="📻 Radio Stations", 
+            description="Here are all configured radio stations:", 
+            color=discord.Color.blue()
+        )
+        
+        # Füge jede Station als Feld hinzu
+        for index, (name, url) in enumerate(stations.items(), 1):
+            embed.add_field(
+                name=f"{index}. {name}", 
+                value=f"[Stream URL]({url})", 
+                inline=False
+            )
+        
+        # Zusätzliche Informationen
+        embed.set_footer(
+            text=f"Total Stations: {len(stations)} | Use !radio to select a station", 
+            icon_url=ctx.guild.icon.url if ctx.guild.icon else None
+        )
+        
+        await ctx.send(embed=embed)
+    
+    except Exception as e:
+        # Fehler-Embed
+        embed = discord.Embed(
+            title="❌ Error", 
+            description=f"Could not read radio stations: {str(e)}", 
+            color=discord.Color.red()
+        )
+        await ctx.send(embed=embed)
+        
 # Event handler for command errors
 @bot.event
 async def on_command_error(ctx, error):
@@ -558,32 +704,55 @@ async def on_resumed():
 
 @bot.event
 async def on_voice_state_update(member, before, after):
-    # Check if the bot was moved
     if member.id == bot.user.id:
-        # If the bot was moved to a different channel (not disconnected)
+        # Wenn der Bot in einen neuen Sprachkanal verschoben wird
         if before.channel is not None and after.channel is not None:
             if before.channel.id != after.channel.id:
-                # Continue playing in the new channel
-                if member.guild.voice_client and member.guild.voice_client.is_playing():
-                    # Keep the current stream playing
-                    return
-                else:
-                    # Restart the stream if it's not playing
-                    player = discord.FFmpegPCMAudio(current_stream_url, **ffmpeg_options)
-                    member.guild.voice_client.play(player, after=lambda e: asyncio.create_task(check_and_restart_stream(member.guild, current_stream_url)))
-        # If the bot was disconnected (after.channel is None)
-        elif after.channel is None:
-            # Try to reconnect to the default channel
-            try:
-                default_channel = bot.get_channel(default_voice_channel_id)
-                if default_channel:
-                    await default_channel.connect()
-                    if member.guild.voice_client:
-                        player = discord.FFmpegPCMAudio(current_stream_url, **ffmpeg_options)
-                        member.guild.voice_client.play(player, after=lambda e: asyncio.create_task(check_and_restart_stream(member.guild, current_stream_url)))
-            except Exception as e:
-                print(f"Error reconnecting to voice channel: {e}")
+                # Überprüfe und starte Stream neu, falls er gestoppt ist
+                if member.guild.voice_client:
+                    if not member.guild.voice_client.is_playing():
+                        try:
+                            # Versuche, den aktuellen Stream neu zu starten
+                            player = discord.FFmpegPCMAudio(current_stream_url, **ffmpeg_options)
+                            member.guild.voice_client.play(
+                                player, 
+                                after=lambda e: asyncio.create_task(check_and_restart_stream(member.guild, current_stream_url))
+                            )
+                            print(f"Restarted stream in new channel: {current_stream_url}")
+                        except Exception as e:
+                            print(f"Error restarting stream in new channel: {e}")
+                            
+                            # Fallback: Starte Standardsender nach kurzer Verzögerung
+                            await asyncio.sleep(2)
+                            try:
+                                default_player = discord.FFmpegPCMAudio(default_stream_url, **ffmpeg_options)
+                                member.guild.voice_client.play(
+                                    default_player, 
+                                    after=lambda e: asyncio.create_task(check_and_restart_stream(member.guild, default_stream_url))
+                                )
+                                print(f"Fallback: Started default stream: {default_stream_url}")
+                                
+                                # Optional: Benachrichtige in einem Textkanal
+                                default_text_channel = bot.get_channel(channel_id)
+                                if default_text_channel:
+                                    await default_text_channel.send(f"Stream stopped. Switched to default station: {default_stream_url}")
+                            
+                            except Exception as fallback_error:
+                                print(f"Error starting default stream: {fallback_error}")
 
+    # Zusätzliche Logik für andere Mitglieder (optional)
+    else:
+        # Optionale Überprüfung, ob der Bot noch Musik spielt
+        if member.guild.voice_client and not member.guild.voice_client.is_playing():
+            try:
+                player = discord.FFmpegPCMAudio(default_stream_url, **ffmpeg_options)
+                member.guild.voice_client.play(
+                    player, 
+                    after=lambda e: asyncio.create_task(check_and_restart_stream(member.guild, default_stream_url))
+                )
+                print(f"Restarted default stream: {default_stream_url}")
+            except Exception as e:
+                print(f"Error restarting stream: {e}")
 
 # Run the bot with the token
 bot.run(token)
