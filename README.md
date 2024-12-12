@@ -1,4 +1,4 @@
-# revRadio Music Bot
+# revRadio Bot
 
 A versatile Discord bot for streaming radio stations with advanced stream management, error handling, and user experience features. This bot provides robust radio streaming capabilities with automatic recovery, dynamic station management, and comprehensive command interfaces.
 
