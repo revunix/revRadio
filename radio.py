@@ -110,18 +110,39 @@ async def on_ready():
     global current_stream_url
     current_stream_url = default_stream_url
     update_activity.start()
-    station_name = next((name for name, url in radio_stations.items() if url == default_stream_url), "Unknown Station")
-    for guild in bot.guilds:
-        await nickname_change(guild, station_name, bot.user)
+    
+    # Attempt to move the bot to the default voice channel and start the default station
     default_channel = bot.get_channel(default_voice_channel_id)
     if default_channel:
         if not default_channel.guild.voice_client:
             await default_channel.connect()
-        if default_channel.guild.voice_client and not default_channel.guild.voice_client.is_playing():
-            title = await get_stream_title(default_stream_url)
-            if title:
-                player = discord.FFmpegPCMAudio(default_stream_url, **ffmpeg_options)
-                default_channel.guild.voice_client.play(player, after=lambda e: print(f'Player error: {e}') if e else None)
+            print(f"Bot connected to default channel: {default_channel.name}")
+            # Start the default station
+            station_name = next((name for name, url in radio_stations.items() if url == default_stream_url), "Unknown Station")
+            # Assuming play_station is a function that needs to be defined or imported
+            # Since it's not defined in the provided code, we'll simulate its functionality
+            # This is a placeholder for the actual play_station function
+            # Instead of just simulating, let's actually play the station
+            voice_client = default_channel.guild.voice_client
+            audio_source = discord.FFmpegPCMAudio(default_stream_url)
+            voice_client.play(audio_source)
+            print(f"Playing {station_name} in default channel: {default_channel.name}")
+        else:
+            print(f"Bot is already connected to a voice channel: {default_channel.name}")
+            # Check if the default station is already playing
+            if default_channel.guild.voice_client.is_playing():
+                print(f"Default station is already playing in default channel: {default_channel.name}")
+            else:
+                # Start the default station if not already playing
+                station_name = next((name for name, url in radio_stations.items() if url == default_stream_url), "Unknown Station")
+                # Instead of just simulating, let's actually play the station
+                voice_client = default_channel.guild.voice_client
+                audio_source = discord.FFmpegPCMAudio(default_stream_url)
+                voice_client.play(audio_source)
+                print(f"Playing {station_name} in default channel: {default_channel.name}")
+
+    for guild in bot.guilds:
+        await nickname_change(guild, station_name, bot.user)
 
 
 # Store the current stream URL
@@ -339,7 +360,10 @@ async def play_station_callback(interaction, index, station_name):
                     try:
                         # Hier wird der Stream abgespielt
                         player = discord.FFmpegPCMAudio(url, **ffmpeg_options)  # ffmpeg_options ohne -re
-                        interaction.guild.voice_client.play(player, after=lambda e: print(f'Player error: {e}') if e else None)
+                        interaction.guild.voice_client.play(player, after=lambda e: handle_after_play(e, interaction.guild))
+                        
+                        # Log the currently playing station instead of sending a message
+                        print(f"Now playing: {station_name}")  # Log the song title instead of sending a message
                         
                         # Nickname aktualisieren
                         await nickname_change(interaction.guild, station_name, interaction.guild.me)
@@ -352,6 +376,13 @@ async def play_station_callback(interaction, index, station_name):
             print("Invalid station number.")  # Log the message, no need to respond again
     else:
         print("Error connecting the voice client.")  # Log the message, no need to respond again
+
+async def handle_after_play(error, guild):
+    if error:
+        print(f'Player error: {error}')
+    
+    # Call the check_and_restart_stream function
+    await check_and_restart_stream(guild, current_stream_url)
 
 # Function to check if the stream has stopped and restart it
 async def check_and_restart_stream(guild, url):
@@ -711,57 +742,37 @@ async def on_disconnect():
 async def on_resumed():
     print("Bot reconnected successfully.")
 
+# Funktion, um den Bot zurück in den Standard-Sprachkanal zu bewegen
+async def check_and_move_bot(guild):
+    voice_client = guild.voice_client
+    if voice_client and voice_client.channel:
+        # Überprüfen, ob der Bot alleine ist
+        if len(voice_client.channel.members) == 1:  # Nur der Bot ist im Kanal
+            default_channel = bot.get_channel(default_voice_channel_id)
+            if default_channel and voice_client.channel.id != default_channel.id:
+                await voice_client.move_to(default_channel)
+                print(f"Bot moved back to default channel: {default_channel.name}")
+        else:
+            # Überprüfen, ob der letzte Benutzer den Kanal verlassen hat
+            for member in voice_client.channel.members:
+                if member != voice_client.channel.guild.me:  # Ignoriere den Bot
+                    return  # Jemand ist noch im Kanal, also nichts tun
+            # Wenn wir hier sind, bedeutet das, dass der Bot der letzte ist
+            default_channel = bot.get_channel(default_voice_channel_id)
+            if default_channel and voice_client.channel.id != default_channel.id:
+                await voice_client.move_to(default_channel)
+                print(f"Bot moved back to default channel: {default_channel.name}")
+
+# Event-Handler für das Verlassen eines Sprachkanals
 @bot.event
 async def on_voice_state_update(member, before, after):
-    if member.id == bot.user.id:
-        # Wenn der Bot in einen neuen Sprachkanal verschoben wird
-        if before.channel is not None and after.channel is not None:
-            if before.channel.id != after.channel.id:
-                # Überprüfe und starte Stream neu, falls er gestoppt ist
-                if member.guild.voice_client:
-                    if not member.guild.voice_client.is_playing():
-                        try:
-                            # Versuche, den aktuellen Stream neu zu starten
-                            player = discord.FFmpegPCMAudio(current_stream_url, **ffmpeg_options)
-                            member.guild.voice_client.play(
-                                player, 
-                                after=lambda e: asyncio.create_task(check_and_restart_stream(member.guild, current_stream_url))
-                            )
-                            print(f"Restarted stream in new channel: {current_stream_url}")
-                        except Exception as e:
-                            print(f"Error restarting stream in new channel: {e}")
-                            
-                            # Fallback: Starte Standardsender nach kurzer Verzögerung
-                            await asyncio.sleep(2)
-                            try:
-                                default_player = discord.FFmpegPCMAudio(default_stream_url, **ffmpeg_options)
-                                member.guild.voice_client.play(
-                                    default_player, 
-                                    after=lambda e: asyncio.create_task(check_and_restart_stream(member.guild, default_stream_url))
-                                )
-                                print(f"Fallback: Started default stream: {default_stream_url}")
-                                
-                                # Optional: Benachrichtige in einem Textkanal
-                                default_text_channel = bot.get_channel(channel_id)
-                                if default_text_channel:
-                                    await default_text_channel.send(f"Stream stopped. Switched to default station: {default_stream_url}")
-                            
-                            except Exception as fallback_error:
-                                print(f"Error starting default stream: {fallback_error}")
+    if member == bot.user:  # Wenn der Bot selbst betroffen ist
+        await check_and_move_bot(member.guild)
 
-    # Zusätzliche Logik für andere Mitglieder (optional)
-    else:
-        # Optionale Überprüfung, ob der Bot noch Musik spielt
-        if member.guild.voice_client and not member.guild.voice_client.is_playing():
-            try:
-                player = discord.FFmpegPCMAudio(default_stream_url, **ffmpeg_options)
-                member.guild.voice_client.play(
-                    player, 
-                    after=lambda e: asyncio.create_task(check_and_restart_stream(member.guild, default_stream_url))
-                )
-                print(f"Restarted default stream: {default_stream_url}")
-            except Exception as e:
-                print(f"Error restarting stream: {e}")
+    # Überprüfen, ob ein anderer Benutzer den Kanal verlässt
+    if before.channel and not after.channel:  # Benutzer hat den Kanal verlassen
+        await check_and_move_bot(member.guild)
+
 
 # Run the bot with the token
 bot.run(token)
