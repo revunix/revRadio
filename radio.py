@@ -342,9 +342,10 @@ async def on_ready():
 @commands.check(lambda ctx: ctx.channel.id == channel_id and any(role.id in allowed_role_ids for role in ctx.author.roles))
 async def fix_stream(ctx):
     global current_stream_url
-    
+
     logger.info(f"Fix command initiated by {ctx.author} in {ctx.guild.name}")
-    
+
+    # Sicherstellen, dass bot im Voice-Channel ist
     if not ctx.voice_client:
         if ctx.author.voice:
             await ctx.author.voice.channel.connect()
@@ -359,16 +360,18 @@ async def fix_stream(ctx):
                 await ctx.send("Cannot connect to voice channel!")
                 return
 
+    # Sicherstellen, dass ein Stream gesetzt ist
     if not current_stream_url:
         current_stream_url = default_stream_url
-        logger.info(f"Using default stream URL in {ctx.guild.name}")
+        logger.warning(f"No current stream found in {ctx.guild.name}, fallback to default")
         await ctx.send("No current stream found, starting default station.")
-    
+
     try:
         def after_playing(error):
             if error:
                 logger.error(f"Playback error: {error} in {ctx.guild.name}")
-            
+
+            # Restart-Task
             bot.loop.create_task(
                 check_and_restart_stream(ctx.guild, current_stream_url)
             )
@@ -376,21 +379,22 @@ async def fix_stream(ctx):
         if ctx.voice_client.is_playing():
             ctx.voice_client.stop()
             logger.info(f"Stopped current stream in {ctx.guild.name}")
-        
+
         await asyncio.sleep(1)
-        
+
         player = discord.FFmpegPCMAudio(current_stream_url, **ffmpeg_options)
         ctx.voice_client.play(player, after=after_playing)
-        
+
         station_name = next((name for name, url in radio_stations.items() if url == current_stream_url), "Unknown Station")
         await nickname_change(ctx.guild, station_name, ctx.guild.me)
-        
+
         logger.info(f"Stream restarted: {station_name} in {ctx.guild.name}")
         await ctx.send(f"Stream restarted: {station_name}")
-    
+
     except Exception as e:
         logger.error(f"Error in fix_stream: {str(e)} in {ctx.guild.name}")
         await ctx.send(f"Error starting stream: {str(e)}")
+
 
 # Error handling
 @bot.event
@@ -433,7 +437,7 @@ async def check_and_move_bot(guild):
 @commands.check(lambda ctx: ctx.channel.id == channel_id and any(role.id in allowed_role_ids for role in ctx.author.roles))
 async def stations(ctx):
     logger.info(f"Radio command initiated by {ctx.author} in {ctx.guild.name}")
-    
+
     if not radio_stations:
         await ctx.send("No radio stations available.")
         return
@@ -454,9 +458,25 @@ async def stations(ctx):
         station_name = station_names[index - 1]
         url = radio_stations[station_name]
 
+        global current_stream_url
+
         if current_stream_url != url:
-            await interaction.response.send_message(f"Now playing: {station_name}", ephemeral=True)
-            await play_station_callback(interaction, index, station_name)
+            guild = interaction.guild
+            voice_client = guild.voice_client
+
+            if voice_client and voice_client.is_connected():
+                if voice_client.is_playing():
+                    voice_client.stop()
+                player = discord.FFmpegPCMAudio(url, **ffmpeg_options)
+                voice_client.play(
+                    player,
+                    after=lambda e: bot.loop.create_task(check_and_restart_stream(guild, url))
+                )
+                current_stream_url = url
+                await nickname_change(guild, station_name, guild.me)
+                await interaction.response.send_message(f"Now playing: {station_name}", ephemeral=True)
+            else:
+                await interaction.response.send_message("Bot ist nicht im Voice-Channel! Bitte nutze !join.", ephemeral=True)
         else:
             await interaction.response.send_message(f"Already playing: {station_name}", ephemeral=True)
 
@@ -465,8 +485,8 @@ async def stations(ctx):
     view.add_item(select)
 
     embed = discord.Embed(
-        title="📻 Available Radio Stations", 
-        description="Select a station from the dropdown menu", 
+        title="📻 Available Radio Stations",
+        description="Select a station from the dropdown menu",
         color=discord.Color.blue()
     )
     await ctx.send(embed=embed, view=view)
