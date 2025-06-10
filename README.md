@@ -175,6 +175,8 @@ client_id = YOUR_CLIENT_ID
 banned_titles = ANTENNE NRW,Radio XY,Werbung,Unknown,Live-Stream,Test-Stream
 
 [spotify]
+client_id = YOUR_SPOTIFY_CLIENT_ID
+client_secret = YOUR_SPOTIFY_CLIENT_SECRET
 update_channel_id = 112233445566778899
 
 [radio_stations]
