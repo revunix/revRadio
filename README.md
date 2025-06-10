@@ -1,81 +1,201 @@
-# revRadio Bot
+# revRadio - Discord Radio Bot 🎵
 
-A versatile Discord bot for streaming radio stations with advanced stream management, error handling, and user experience features. This bot provides robust radio streaming capabilities with automatic recovery, dynamic station management, and comprehensive command interfaces.
+A feature-rich Discord bot for streaming radio stations with automatic recovery and management features.
 
-## Features
+## Features 🚀
 
-- **Advanced Stream Management**
-  * Resilient stream handling with automatic recovery
-  * Improved error detection and restart mechanisms
-  * Dynamic stream state tracking
+- **Multiple Radio Station Support**: Manage and play multiple radio stations
+- **Automatic Stream Recovery**: Auto-fixes stream issues every 6 hours
+- **Real-time Status Updates**: Shows currently playing track with Spotify cover art
+- **Voice Channel Management**: Automatically moves to default channel when alone
+- **Station Management**: Easy to add, remove, and list radio stations
+- **Volume Control**: Adjustable volume for each stream
+- **Detailed Logging**: Comprehensive logging system for troubleshooting
+- **Admin Controls**: Secure command access with role-based permissions
 
-- **Radio Station Management**
-  * Play radio streams from URLs or predefined stations
-  * Add, remove, and list radio stations dynamically
-  * New `!listradio` command to display all configured stations
+## Commands 📝
 
-- **Enhanced User Experience**
-  * Informative embed messages for commands
-  * Detailed error feedback
-  * Interactive station selection
-  * Role-based command permissions
+### Radio Controls
+```
+!radio    - Show available stations
+!play #   - Play station by number
+!play URL - Play custom stream URL
+!stop     - Stop current playback
+!vol 0-100- Adjust volume
+!fix      - Fix stream issues
+```
 
-- **Technical Capabilities**
-  * Discord Rich Presence integration
-  * Automatic song title and cover art updates
-  * Volume control
-  * Stream state preservation across channel moves
-  * Spotify cover image integration
+### Voice Channel Controls
+```
+!join     - Join your voice channel
+!leave    - Leave voice channel
+```
 
-## Commands
+### Station Management
+```
+!add      - Add new radio station
+!remove   - Remove a radio station
+!listradio- List all radio stations
+```
 
-- `!join`: Joins a voice channel
-- `!leave`: Leaves the voice channel
-- `!play <url|number>`: Plays a radio stream
-- `!stop`: Stops playback
-- `!vol <volume>`: Adjusts volume (0-100)
-- `!setdefault <url>`: Updates default stream URL
-- `!radio`: Interactive station selection menu
-- `!listradio`: Lists all configured radio stations
-- `!add <name> <url>`: Adds a new radio station
-- `!remove`: Removes a radio station
-- `!restart`: Restarts the bot
-- `!reload`: Reloads configuration
-- `!commands`: Displays available commands
-- `!status`: Shows current station and title
-- `!stats`: Shows bot statistics
-- `!fix`: Resolves stream playback issues
+### System Commands
+```
+!stats    - Show bot statistics
+!about    - Show bot information
+!help     - Show command list
+```
 
-## New in v1.2.1 - Stream Resilience and Management Update
+### Admin Commands
+```
+!setdefault - Set default stream URL
+!restart    - Restart the bot
+!reload     - Reload configuration
+```
 
-- **Improved Stream Handling**
-  * More robust async event loop management
-  * Enhanced error recovery mechanisms
-  * Thread-safe coroutine execution
+## Installation Options 🔧
 
-- **New Features**
-  * Officially named the bot **revRadio**
-  * Comprehensive error logging
-  * Informative embed messages
-  * Improved configuration management
+### Using Docker (Recommended)
 
-- **Technical Enhancements**
-  * Better async task management
-  * More consistent error handling
-  * Enhanced voice client state management
+1. Pull the Docker image:
+```bash
+docker pull ghcr.io/revunix/revradio:latest
+```
 
-## Setup and Installation
+2. Create a config directory and config.ini:
+```bash
+mkdir -p /opt/revradio
+cd /opt/revradio
+nano config.ini
+```
 
-(Rest of the setup instructions remain the same as in the previous README)
+3. Run the container:
+```bash
+docker run -d \
+  --name revradio \
+  --restart unless-stopped \
+  -v /opt/revradio/config.ini:/app/config.ini \
+  ghcr.io/revunix/revradio:latest
+```
 
-## Troubleshooting
+### Manual Installation
 
-- Ensure Python 3.8+ and discord.py v2.0+
-- Verify FFmpeg installation
-- Check bot permissions in Discord
-- Use `!fix` for stream interruptions
-- Consult error messages in embeds
+1. Clone the repository:
+```bash
+git clone https://github.com/revunix/revRadio.git
+```
 
-## Contributing
+2. Install dependencies:
+```bash
+pip install -r requirements.txt
+```
 
-Contributions welcome! Please submit issues or pull requests on our GitHub repository.
+3. Install FFmpeg:
+```bash
+# Ubuntu/Debian
+sudo apt-get install ffmpeg
+
+# CentOS
+sudo yum install ffmpeg
+
+# Windows
+# Download from https://ffmpeg.org/download.html
+```
+
+## Configuration ⚙️
+
+Create `config.ini` with the following structure:
+
+```ini
+[settings]
+token = YOUR_DISCORD_BOT_TOKEN
+channel_id = COMMAND_CHANNEL_ID
+default_voice_channel_id = DEFAULT_VOICE_CHANNEL_ID
+default_stream_url = DEFAULT_STREAM_URL
+default_volume = 100
+allowed_role_ids = ROLE_ID1,ROLE_ID2
+client_id = YOUR_CLIENT_ID
+
+[spotify]
+client_id = YOUR_SPOTIFY_CLIENT_ID
+client_secret = YOUR_SPOTIFY_CLIENT_SECRET
+update_channel_id = STATUS_UPDATE_CHANNEL_ID
+
+[radio_stations]
+station1_name = Station Name
+station1_url = Station URL
+```
+
+## Docker Compose Example
+
+```yaml
+version: '3.8'
+services:
+  revradio:
+    image: ghcr.io/revunix/revradio:latest
+    container_name: revradio
+    restart: unless-stopped
+    volumes:
+      - /opt/revradio/config.ini:/app/config.ini
+```
+
+## Requirements 📋
+
+### For Docker
+- Docker Engine 20.10+
+- Docker Compose (optional)
+
+### For Manual Installation
+- Python 3.8+
+- FFmpeg
+- Required Python packages:
+  - discord.py
+  - psutil
+  - aiohttp
+  - configparser
+
+## New Features in Latest Update 🆕
+
+- **Automatic Stream Recovery**: Bot now automatically runs !fix every 6 hours
+- **Enhanced Logging System**: Detailed logging with timestamps
+- **Improved Help Command**: Categorized help menu with detailed command information
+- **Spotify Integration**: Shows album covers for currently playing tracks
+- **Status Updates**: Real-time track information in designated channel
+
+## Support & Troubleshooting 💬
+
+### Docker Logs
+```bash
+docker logs revradio
+```
+
+### Container Management
+```bash
+# Stop the bot
+docker stop revradio
+
+# Start the bot
+docker start revradio
+
+# Restart the bot
+docker restart revradio
+
+# Remove the container
+docker rm -f revradio
+```
+
+### Manual Logs
+Check `discord_radio_bot.log` in the installation directory.
+
+For support, feature requests, or bug reports, please open an issue on GitHub.
+
+## License 📄
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## Author ✨
+
+Made with ❤️ by REVUNIX
+
+---
+
+Remember to star ⭐ the repository if you find it useful!
